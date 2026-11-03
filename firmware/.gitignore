@@ -1,0 +1,6 @@
+build/
+sim/build/
+sdkconfig
+sdkconfig.old
+managed_components/
+tools/map_bg_preview.png
