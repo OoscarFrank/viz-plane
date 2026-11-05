@@ -322,11 +322,17 @@ static void fetch_world(void)
     plat_unlock();
 }
 
+volatile bool app_sleeping;
+static volatile bool wake_now;
+void adsb_wake(void) { wake_now = true; }
+
 static void task(void *arg)
 {
     (void)arg;
     uint32_t next = 0, next_world = 0;
     for (;;) {
+        if (app_sleeping) { plat_sleep_ms(500); continue; }
+        if (wake_now) { wake_now = false; next = next_world = plat_ms(); }
         char ssid[33], ip[16];
         int rssi;
         if (plat_wifi_info(ssid, ip, &rssi) != NET_UP) { plat_sleep_ms(500); continue; }

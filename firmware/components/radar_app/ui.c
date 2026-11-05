@@ -226,10 +226,47 @@ static void style_label(slot_t *s, bool sel)
     rare_t r = rare_of(&s->d, &tag);
     if (r) lv_label_set_text_fmt(s->lbl, "%s · %s", s->d.call, tag);
     else lv_label_set_text(s->lbl, s->d.call);
-    lv_obj_set_style_bg_color(s->lbl, sel ? C_FG : r ? rare_color(r) : C_BG, 0);
+    bool dimmed = selected >= 0 && !sel;
+    lv_color_t bg = sel ? C_FG : r ? rare_color(r) : C_BG;
+    if (dimmed && r) bg = lv_color_mix(bg, C_BG, LV_OPA_40);
+    lv_obj_set_style_bg_color(s->lbl, bg, 0);
     lv_obj_set_style_bg_opa(s->lbl, sel || r ? LV_OPA_COVER : LV_OPA_80, 0);
-    lv_obj_set_style_text_color(s->lbl, sel || r ? C_INK : C_FG, 0);
+    lv_obj_set_style_text_color(s->lbl, sel || r ? C_INK : dimmed ? C_DIM : C_FG, 0);
     s->rare = r;
+}
+
+/* ---------- selection marker: ring on the selected aircraft, the others dimmed ---------- */
+static lv_obj_t *sel_ring, *sel_edge;
+
+static void layout(void);
+
+static void mark_selection(void)
+{
+    if (!sel_ring) {
+        sel_ring = lv_obj_create(map_obj);
+        lv_obj_remove_style_all(sel_ring);
+        lv_obj_set_size(sel_ring, 38, 38);
+        lv_obj_set_style_radius(sel_ring, LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_border_color(sel_ring, C_ACCENT, 0);
+        lv_obj_set_style_border_width(sel_ring, 3, 0);
+        lv_obj_clear_flag(sel_ring, LV_OBJ_FLAG_CLICKABLE);
+        sel_edge = lv_label_create(map_obj);
+        lv_obj_set_style_text_font(sel_edge, &font_s20, 0);
+        lv_obj_set_style_text_color(sel_edge, C_ACCENT, 0);
+        lv_label_set_text(sel_edge, LV_SYMBOL_RIGHT);
+    }
+    for (int i = 0; i < MAX_AC; i++) {
+        if (!S[i].used) continue;
+        style_label(&S[i], i == selected);
+        lv_img_set_zoom(S[i].ic, i == selected ? 320 : 256);
+        lv_img_set_zoom(S[i].ol, i == selected ? 320 : 256);
+    }
+    lv_obj_add_flag(sel_edge, LV_OBJ_FLAG_HIDDEN);
+    if (selected < 0) lv_obj_add_flag(sel_ring, LV_OBJ_FLAG_HIDDEN);
+    else {
+        lv_obj_clear_flag(sel_ring, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_move_foreground(sel_ring);    /* under the selected icon, moved up next */
+    }
 }
 
 /* ---------- flight card ---------- */
@@ -240,6 +277,7 @@ static void close_panel(void)
         style_label(&S[selected], false);
     }
     selected = -1;
+    mark_selection();
     lv_obj_add_flag(panel, LV_OBJ_FLAG_HIDDEN);
 }
 
@@ -320,9 +358,11 @@ static void open_panel(int i)
     lv_label_set_text(p_sub[5], s->d.hex);
     lv_obj_set_style_line_width(s->trail, 3, 0);
     style_label(s, true);
+    mark_selection();
     lv_obj_move_foreground(s->ol);
     lv_obj_move_foreground(s->ic);
     lv_obj_move_foreground(s->lbl);
+    layout();
     adsb_request_route(s->d.call, true);
     s->route_asked = plat_ms();
     update_panel();
@@ -582,12 +622,23 @@ static void layout(void)
         }
         if (!vis) continue;
         lv_color_t col = alt_color(s->d.alt);
+        if (selected >= 0 && order[k] != selected) col = lv_color_mix(col, C_BG, LV_OPA_40);
         int16_t ang = (int16_t)lroundf(s->d.trk * 10) % 3600;
         lv_obj_set_pos(s->ol, x - 16, y - 16);
         lv_obj_set_pos(s->ic, x - 16, y - 16);
         lv_img_set_angle(s->ol, ang);
         lv_img_set_angle(s->ic, ang);
         lv_obj_set_style_img_recolor(s->ic, col, 0);
+        if (order[k] == selected && sel_ring) {
+            lv_obj_set_pos(sel_ring, x - 19, y - 19);
+            bool under = x > SCR_W - PANEL_W - 8;      /* hidden by the card: point at it from the edge */
+            if (under) {
+                lv_obj_set_pos(sel_edge, SCR_W - PANEL_W - 22, y - 12);
+                lv_obj_clear_flag(sel_edge, LV_OBJ_FLAG_HIDDEN);
+            } else {
+                lv_obj_add_flag(sel_edge, LV_OBJ_FLAG_HIDDEN);
+            }
+        }
         /* trail: one point every 6 px, the last one follows the aircraft */
         if (s->ntp == 0 || abs(s->tp[s->ntp - 1].x - x) + abs(s->tp[s->ntp - 1].y - y) > 6) {
             if (s->ntp == TRAIL_N) { memmove(s->tp, s->tp + 1, sizeof(lv_point_t) * (TRAIL_N - 1)); s->ntp--; }
@@ -597,7 +648,7 @@ static void layout(void)
         lv_line_set_points(s->trail, s->tp, s->ntp + 1);
         lv_obj_set_style_line_color(s->trail, col, 0);
         lv_point_t sz;
-        lv_txt_get_size(&sz, s->d.call, &font_m12, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+        lv_txt_get_size(&sz, lv_label_get_text(s->lbl), &font_m12, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
         rect_t b = {0};
         int best = s->label_pos;
         for (int t = 0; t < 5; t++) {
@@ -795,6 +846,39 @@ static void scan(void)
 static void scan_cb(lv_event_t *e) { (void)e; scan(); }
 static void wifi_back_cb(lv_event_t *e) { (void)e; lv_obj_add_flag(wifi_scr, LV_OBJ_FLAG_HIDDEN); }
 
+/* ---------- sleep: backlight off, no polling, a tap anywhere wakes it up ---------- */
+static lv_obj_t *sleep_ov;
+
+static void wake_cb(lv_event_t *e)
+{
+    (void)e;
+    lv_obj_add_flag(sleep_ov, LV_OBJ_FLAG_HIDDEN);
+    plat_backlight(true);
+    app_sleeping = false;
+    adsb_wake();
+}
+
+static void sleep_cb(lv_event_t *e)
+{
+    (void)e;
+    if (!sleep_ov) {
+        sleep_ov = lv_obj_create(lv_layer_top());
+        lv_obj_remove_style_all(sleep_ov);
+        lv_obj_set_size(sleep_ov, SCR_W, 480);
+        lv_obj_set_style_bg_color(sleep_ov, lv_color_black(), 0);
+        lv_obj_set_style_bg_opa(sleep_ov, LV_OPA_COVER, 0);
+        lv_obj_add_flag(sleep_ov, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(sleep_ov, wake_cb, LV_EVENT_CLICKED, NULL);
+        lv_obj_t *l = label(sleep_ov, &font_m14, lv_color_hex(0x30444b), "En veille · touchez l'écran pour réveiller");
+        lv_obj_center(l);
+    }
+    lv_obj_add_flag(wifi_scr, LV_OBJ_FLAG_HIDDEN);
+    if (selected >= 0) close_panel();
+    lv_obj_clear_flag(sleep_ov, LV_OBJ_FLAG_HIDDEN);
+    app_sleeping = true;
+    plat_backlight(false);
+}
+
 static void open_wifi(void)
 {
     lv_obj_clear_flag(wifi_scr, LV_OBJ_FLAG_HIDDEN);
@@ -839,6 +923,7 @@ static void render_wifi_side(void)
         lv_obj_remove_style_all(sp);
         lv_obj_set_flex_grow(sp, 1);
         button(wifi_side, "Oublier ce réseau", 226, 44, false, forget_cb, NULL);
+        button(wifi_side, LV_SYMBOL_EYE_CLOSE "  Mettre en veille", 226, 44, true, sleep_cb, NULL);
     } else {
         label(wifi_side, &font_s20, C_FG, st == NET_CONNECTING ? "Connexion…" : "Non connecté");
         lv_obj_t *p = label(wifi_side, &font_m14, C_DIM,
@@ -846,6 +931,10 @@ static void render_wifi_side(void)
                             "Seuls les réseaux 2,4 GHz sont visibles.");
         lv_obj_set_width(p, 226);
         lv_label_set_long_mode(p, LV_LABEL_LONG_WRAP);
+        lv_obj_t *sp = lv_obj_create(wifi_side);
+        lv_obj_remove_style_all(sp);
+        lv_obj_set_flex_grow(sp, 1);
+        button(wifi_side, LV_SYMBOL_EYE_CLOSE "  Mettre en veille", 226, 44, true, sleep_cb, NULL);
     }
 }
 
@@ -867,7 +956,7 @@ static lv_obj_t *topbar(lv_obj_t *parent, const char *title, lv_event_cb_t back_
 static lv_obj_t *build_wifi(lv_obj_t *scr)
 {
     lv_obj_t *w = box(scr, 0, 0, SCR_W, 480, C_BG);
-    lv_obj_t *t = topbar(w, "Wi-Fi", wifi_back_cb, NULL);
+    lv_obj_t *t = topbar(w, "Réglages", wifi_back_cb, NULL);
     lv_obj_t *r = button(t, "Actualiser", 120, 40, false, scan_cb, NULL);
     lv_obj_align(r, LV_ALIGN_RIGHT_MID, -8, 0);
     wifi_list = lv_obj_create(w);

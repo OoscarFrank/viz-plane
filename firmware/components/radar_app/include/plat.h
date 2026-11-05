@@ -20,6 +20,9 @@ void *plat_big_alloc(size_t n);                      /* large buffers (PSRAM on 
 void plat_big_free(void *p);
 void plat_thread(void (*fn)(void *), void *arg, const char *name, uint32_t stack_bytes);
 
+/* Screen backlight (LVGL thread) */
+void plat_backlight(bool on);
+
 /* LVGL lock (recursive): take it to touch the UI from another thread */
 bool plat_lock(int timeout_ms);
 void plat_unlock(void);

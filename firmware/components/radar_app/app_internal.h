@@ -45,6 +45,8 @@ typedef struct {
 
 /* adsb.c */
 void adsb_start(void);
+extern volatile bool app_sleeping;                       /* screen asleep: no polling */
+void adsb_wake(void);                                    /* poll now */
 void adsb_request_route(const char *callsign, bool urgent);  /* LVGL lock held */
 bool adsb_route_pending(const char *callsign);           /* lookup not answered yet; LVGL lock held */
 const route_t *adsb_route(const ac_t *a);                /* NULL if unknown or implausible; LVGL lock held */

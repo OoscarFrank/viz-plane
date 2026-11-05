@@ -144,6 +144,8 @@ void plat_wifi_connect(const char *ssid, const char *pw)
     net = NET_CONNECTING;
     plat_thread(connect_job, NULL, "connect", 0);
 }
+void plat_backlight(bool on) { (void)on; }       /* the black sleep overlay is enough on screen */
+
 void plat_wifi_forget(void) { saved = false; net = NET_DOWN; ssid_cur[0] = 0; }
 bool plat_wifi_has_saved(void) { return saved; }
 plat_net_state_t plat_wifi_info(char ssid[33], char ip[16], int *rssi)
