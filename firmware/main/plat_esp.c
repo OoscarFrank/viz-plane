@@ -68,7 +68,7 @@ static esp_err_t http_ev(esp_http_client_event_t *e)
 
 /* One kept-alive connection per host: a TLS handshake costs ~2 s on the ESP32.
  * Only the data thread makes requests, so no locking. */
-#define HTTP_CONNS 3
+#define HTTP_CONNS 5                    /* adsb.lol (or fallback), hexdb, adsbdb, adsb.fi stats */
 static struct { char host[48]; esp_http_client_handle_t h; } conns[HTTP_CONNS];
 static int conn_next;
 

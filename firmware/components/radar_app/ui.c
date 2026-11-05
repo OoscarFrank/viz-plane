@@ -20,6 +20,9 @@
 #define C_OK     lv_color_hex(0x6fdc9c)
 #define C_ERR    lv_color_hex(0xff8a7a)
 #define C_INK    lv_color_hex(0x14252c)
+#define C_EMERG  lv_color_hex(0xff5a4a)
+#define C_MIL    lv_color_hex(0xc3cf6e)
+#define C_BIG    lv_color_hex(0xc9a2ff)
 
 #define PANEL_W 276
 #define TRAIL_N 24
@@ -42,6 +45,7 @@ typedef struct {
     int nprof;
     uint32_t last_prof;
     uint32_t route_asked;
+    uint8_t rare;
 } slot_t;
 
 static slot_t S[MAX_AC];
@@ -49,6 +53,9 @@ static int selected = -1;
 
 static lv_obj_t *map_obj, *chip, *age_lbl, *count_lbl, *clock_lbl, *wifi_btn_lbl, *hint, *toast_lbl, *offline;
 static lv_timer_t *toast_timer;
+static int toast_slot = -1;          /* aircraft opened by tapping the toast */
+static int toast_prio;               /* rare_t of the alert on screen: a lesser one does not replace it */
+static int world_n;
 static const char *last_source = "";
 static uint32_t last_ok;
 static bool api_down;
@@ -152,16 +159,25 @@ static lv_obj_t *button(lv_obj_t *parent, const char *txt, lv_coord_t w, lv_coor
     return b;
 }
 
-static void toast_hide(lv_timer_t *t) { (void)t; lv_obj_add_flag(lv_obj_get_parent(toast_lbl), LV_OBJ_FLAG_HIDDEN); toast_timer = NULL; }
+static void toast_hide(lv_timer_t *t) { (void)t; lv_obj_add_flag(lv_obj_get_parent(toast_lbl), LV_OBJ_FLAG_HIDDEN); toast_timer = NULL; toast_prio = 0; }
 
-static void toast(const char *txt)
+static void toast_ex(const char *txt, uint32_t ms, int slot, lv_color_t border)
 {
+    lv_obj_t *tb = lv_obj_get_parent(toast_lbl);
     lv_label_set_text(toast_lbl, txt);
-    lv_obj_clear_flag(lv_obj_get_parent(toast_lbl), LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_style_border_color(tb, border, 0);
+    lv_obj_set_style_border_width(tb, slot >= 0 ? 2 : 1, 0);
+    lv_obj_clear_flag(tb, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(hint, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(tb);
+    toast_slot = slot;
+    toast_prio = 0;
     if (toast_timer) lv_timer_del(toast_timer);
-    toast_timer = lv_timer_create(toast_hide, 3500, NULL);
+    toast_timer = lv_timer_create(toast_hide, ms, NULL);
     lv_timer_set_repeat_count(toast_timer, 1);
 }
+
+static void toast(const char *txt) { toast_ex(txt, 3500, -1, C_LINE); }
 
 static const char *phase(const ac_t *a)
 {
@@ -169,13 +185,59 @@ static const char *phase(const ac_t *a)
     return a->vs > 0 ? "Montée" : "Descente";
 }
 
+/* ---------- rare aircraft: emergencies, military, giants ---------- */
+typedef enum { RARE_NONE, RARE_BIG, RARE_MIL, RARE_EMERG } rare_t;
+
+static const char *giant_name(const char *t)
+{
+    static const char *T[][2] = {
+        {"A388", "A380"}, {"B741", "747"}, {"B742", "747"}, {"B743", "747"}, {"B744", "747"}, {"B748", "747-8"},
+        {"B74S", "747SP"}, {"BLCF", "Dreamlifter"}, {"A124", "An-124"}, {"A225", "An-225"}, {"AN22", "An-22"},
+        {"A3ST", "Beluga"}, {"A337", "BelugaXL"}, {"C5", "C-5 Galaxy"}, {"C5M", "C-5 Galaxy"},
+    };
+    for (size_t i = 0; i < sizeof T / sizeof T[0]; i++) if (!strcmp(t, T[i][0])) return T[i][1];
+    return NULL;
+}
+
+/* Kind of rare aircraft, and its short on-screen tag */
+static rare_t rare_of(const ac_t *a, const char **tag)
+{
+    static const char *E[][2] = {
+        {"general", "URGENCE"}, {"lifeguard", "URGENCE MÉDICALE"}, {"minfuel", "CARBURANT BAS"},
+        {"nordo", "PANNE RADIO"}, {"unlawful", "DÉTOURNEMENT"}, {"downed", "URGENCE"},
+    };
+    for (size_t i = 0; i < sizeof E / sizeof E[0]; i++)
+        if (!strcmp(a->emergency, E[i][0])) { *tag = E[i][1]; return RARE_EMERG; }
+    if (!strcmp(a->squawk, "7700")) { *tag = "URGENCE"; return RARE_EMERG; }
+    if (!strcmp(a->squawk, "7600")) { *tag = "PANNE RADIO"; return RARE_EMERG; }
+    if (!strcmp(a->squawk, "7500")) { *tag = "DÉTOURNEMENT"; return RARE_EMERG; }
+    if (a->db_flags & 1) { *tag = "MILITAIRE"; return RARE_MIL; }
+    if ((*tag = giant_name(a->type))) return RARE_BIG;
+    *tag = "";
+    return RARE_NONE;
+}
+
+static lv_color_t rare_color(rare_t r) { return r == RARE_EMERG ? C_EMERG : r == RARE_MIL ? C_MIL : C_BIG; }
+
+/* Map label: callsign, plus a coloured tag for rare aircraft */
+static void style_label(slot_t *s, bool sel)
+{
+    const char *tag;
+    rare_t r = rare_of(&s->d, &tag);
+    if (r) lv_label_set_text_fmt(s->lbl, "%s · %s", s->d.call, tag);
+    else lv_label_set_text(s->lbl, s->d.call);
+    lv_obj_set_style_bg_color(s->lbl, sel ? C_FG : r ? rare_color(r) : C_BG, 0);
+    lv_obj_set_style_bg_opa(s->lbl, sel || r ? LV_OPA_COVER : LV_OPA_80, 0);
+    lv_obj_set_style_text_color(s->lbl, sel || r ? C_INK : C_FG, 0);
+    s->rare = r;
+}
+
 /* ---------- flight card ---------- */
 static void close_panel(void)
 {
     if (selected >= 0 && S[selected].used) {
         lv_obj_set_style_line_width(S[selected].trail, 2, 0);
-        lv_obj_set_style_bg_color(S[selected].lbl, C_BG, 0);
-        lv_obj_set_style_text_color(S[selected].lbl, C_FG, 0);
+        style_label(&S[selected], false);
     }
     selected = -1;
     lv_obj_add_flag(panel, LV_OBJ_FLAG_HIDDEN);
@@ -202,8 +264,11 @@ static void update_panel(void)
     thousands(b1, sizeof b1, vs);
     lv_label_set_text_fmt(p_val[3], "%s%s ft/min", vs > 0 ? "+" : "", b1);
     lv_label_set_text_fmt(p_sub[3], "%d km de Mulhouse", (int)lroundf(dist_km(s->rlat, s->rlon, MUL_LAT, MUL_LON)));
-    lv_label_set_text(p_phase, phase(a));
-    lv_obj_set_style_text_color(p_phase, alt_color(a->alt), 0);
+    const char *tag;
+    rare_t rare = rare_of(a, &tag);
+    if (rare) lv_label_set_text_fmt(p_phase, "%s · %s", tag, phase(a));
+    else lv_label_set_text(p_phase, phase(a));
+    lv_obj_set_style_text_color(p_phase, rare ? rare_color(rare) : alt_color(a->alt), 0);
 
     const route_t *r = adsb_route(a);
     if (r) {
@@ -254,8 +319,7 @@ static void open_panel(int i)
     lv_label_set_text(p_val[5], s->d.squawk[0] ? s->d.squawk : "—");
     lv_label_set_text(p_sub[5], s->d.hex);
     lv_obj_set_style_line_width(s->trail, 3, 0);
-    lv_obj_set_style_bg_color(s->lbl, C_FG, 0);
-    lv_obj_set_style_text_color(s->lbl, C_INK, 0);
+    style_label(s, true);
     lv_obj_move_foreground(s->ol);
     lv_obj_move_foreground(s->ic);
     lv_obj_move_foreground(s->lbl);
@@ -366,7 +430,9 @@ static void render_list(void)
         lv_obj_set_style_border_color(r, C_RAISE, 0);
         lv_obj_set_style_bg_color(r, C_RAISE, LV_STATE_PRESSED);
         lv_obj_set_style_bg_opa(r, LV_OPA_COVER, LV_STATE_PRESSED);
-        lv_obj_t *dot = box(r, 12, 20, 10, 10, alt_color(s->d.alt));
+        const char *tag;
+        rare_t rare = rare_of(&s->d, &tag);
+        lv_obj_t *dot = box(r, 12, 20, 10, 10, rare ? rare_color(rare) : alt_color(s->d.alt));
         lv_obj_set_style_radius(dot, 5, 0);
         lv_obj_clear_flag(dot, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_t *c = label(r, &font_s16, C_FG, s->d.call);
@@ -378,9 +444,13 @@ static void render_list(void)
         lv_obj_align(al, LV_ALIGN_TOP_RIGHT, -12, 7);
         const route_t *rt = adsb_route(&s->d);
         int km = (int)lroundf(dist_km(s->rlat, s->rlon, MUL_LAT, MUL_LON));
-        if (rt) snprintf(sub, sizeof sub, "%s → %s · %d km", rt->from, rt->to, km);
-        else snprintf(sub, sizeof sub, "%s · %d km", s->d.type[0] ? s->d.type : "?", km);
-        lv_obj_t *sl = label(r, &font_m12, C_DIM, sub);
+        char what[24];
+        if (rt) snprintf(what, sizeof what, "%s → %s", rt->from, rt->to);
+        else snprintf(what, sizeof what, "%s", s->d.type[0] ? s->d.type : "?");
+        if (rare == RARE_BIG && !rt) snprintf(sub, sizeof sub, "%s · %d km", tag, km);
+        else if (rare) snprintf(sub, sizeof sub, "%s · %s · %d km", tag, what, km);
+        else snprintf(sub, sizeof sub, "%s · %d km", what, km);
+        lv_obj_t *sl = label(r, &font_m12, rare ? rare_color(rare) : C_DIM, sub);
         lv_obj_set_pos(sl, 30, 29);
         lv_obj_add_event_cb(r, row_cb, LV_EVENT_CLICKED, (void *)(intptr_t)idx[k]);
     }
@@ -453,8 +523,6 @@ static void slot_create(int i)
     lv_obj_set_ext_click_area(s->ic, 10);
     lv_obj_add_event_cb(s->ic, plane_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
     s->lbl = label(map_obj, &font_m12, C_FG, s->d.call);
-    lv_obj_set_style_bg_color(s->lbl, C_BG, 0);
-    lv_obj_set_style_bg_opa(s->lbl, LV_OPA_80, 0);
     lv_obj_set_style_pad_hor(s->lbl, 5, 0);
     lv_obj_set_style_pad_ver(s->lbl, 1, 0);
     lv_obj_add_flag(s->lbl, LV_OBJ_FLAG_CLICKABLE);
@@ -462,11 +530,13 @@ static void slot_create(int i)
     s->ntp = 0;
     s->nprof = 0;
     s->label_pos = 0;
+    style_label(s, false);
 }
 
 static void slot_free(int i, const char *why)
 {
     slot_t *s = &S[i];
+    if (i == toast_slot) toast_slot = -1;
     if (i == selected) {
         close_panel();
         char msg[48];
@@ -547,6 +617,33 @@ static void layout(void)
     }
 }
 
+/* Banner when a rare aircraft shows up; tapping it opens the flight card */
+static void rare_alert(int i)
+{
+    slot_t *s = &S[i];
+    const char *tag;
+    rare_t r = rare_of(&s->d, &tag);
+    char msg[96];
+    const char *what = s->d.desc[0] ? s->d.desc : s->d.type;
+    if (r == RARE_EMERG) snprintf(msg, sizeof msg, LV_SYMBOL_WARNING "  %s : %s", tag, s->d.call);
+    else if (r == RARE_MIL) snprintf(msg, sizeof msg, "Avion militaire dans la zone : %s%s%s", s->d.call, what[0] ? " · " : "", what);
+    else snprintf(msg, sizeof msg, "%s dans la zone : %s", tag, s->d.call);
+    if (toast_timer && (int)r < toast_prio) return;
+    toast_ex(msg, r == RARE_EMERG ? 20000 : 10000, i, rare_color(r));
+    toast_prio = r;
+}
+
+static void toast_cb(lv_event_t *e)
+{
+    (void)e;
+    int i = toast_slot;
+    if (toast_timer) lv_timer_del(toast_timer);
+    toast_hide(NULL);
+    if (i >= 0 && S[i].used) open_panel(i);
+}
+
+void ui_world_count(int n) { world_n = n; }
+
 void ui_apply_aircraft(const ac_t *list, int n, const char *source)
 {
     uint32_t now = plat_ms();
@@ -566,12 +663,17 @@ void ui_apply_aircraft(const ac_t *list, int n, const char *source)
             S[i].d = *a;
             S[i].rlat = a->lat; S[i].rlon = a->lon;
             slot_create(i);
+            if (S[i].rare) rare_alert(i);
         } else {
             float jump = dist_km(S[i].rlat, S[i].rlon, a->lat, a->lon);
             S[i].off_lat = jump < 5 ? S[i].rlat - a->lat : 0;
             S[i].off_lon = jump < 5 ? S[i].rlon - a->lon : 0;
-            if (strcmp(S[i].d.call, a->call)) lv_label_set_text(S[i].lbl, a->call);
+            const char *tag;
+            rare_t was = S[i].rare, now_r = rare_of(a, &tag);
+            bool relabel = strcmp(S[i].d.call, a->call) || was != now_r;
             S[i].d = *a;
+            if (relabel) style_label(&S[i], i == selected);
+            if (now_r > was) rare_alert(i);
         }
         S[i].t = now;
         if (now - S[i].last_prof > 15000 || S[i].nprof == 0) {
@@ -953,7 +1055,13 @@ static void tick(lv_timer_t *t)
         if (!last_ok) { set_chip("CHARGEMENT", C_ACCENT); lv_label_set_text(age_lbl, ""); }
         else {
             set_chip(api_down ? "API INJOIGNABLE" : "EN DIRECT", api_down ? C_ERR : C_OK);
-            lv_label_set_text_fmt(age_lbl, "%s · il y a %u s", last_source, (unsigned)((plat_ms() - last_ok) / 1000));
+            if (world_n > 0 && !api_down) {
+                char w[16];
+                thousands(w, sizeof w, world_n);
+                lv_label_set_text_fmt(age_lbl, "%s avions suivis dans le monde", w);
+            } else {
+                lv_label_set_text_fmt(age_lbl, "%s · il y a %u s", last_source, (unsigned)((plat_ms() - last_ok) / 1000));
+            }
         }
     }
     int h, m;
@@ -1070,6 +1178,8 @@ void radar_app_start(void)
     lv_obj_set_style_border_color(tb, C_LINE, 0);
     toast_lbl = label(tb, &font_s16, C_FG, "");
     lv_obj_add_flag(tb, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(tb, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(tb, toast_cb, LV_EVENT_CLICKED, NULL);
 
     wifi_scr = build_wifi(scr);
     pw_scr = build_pw(scr);

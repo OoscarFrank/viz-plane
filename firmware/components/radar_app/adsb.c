@@ -10,6 +10,7 @@
 #include "assets/airports.h"
 
 #define POLL_MS 10000
+#define WORLD_MS 60000
 #define BUF_CAP (160 * 1024)
 #define ROUTE_CACHE 96       /* > MAX_AC: every aircraft in view keeps its route */
 #define ROUTE_GAP_MS 250     /* spacing between adsbdb requests */
@@ -71,6 +72,8 @@ static int parse_aircraft(const char *json)
         copy_str(p->type, sizeof p->type, cJSON_GetObjectItemCaseSensitive(a, "t"));
         copy_str(p->desc, sizeof p->desc, cJSON_GetObjectItemCaseSensitive(a, "desc"));
         copy_str(p->squawk, sizeof p->squawk, cJSON_GetObjectItemCaseSensitive(a, "squawk"));
+        copy_str(p->emergency, sizeof p->emergency, cJSON_GetObjectItemCaseSensitive(a, "emergency"));
+        p->db_flags = (uint8_t)num(a, "dbFlags", 0);
         if (!p->call[0]) snprintf(p->call, sizeof p->call, "%s", p->reg[0] ? p->reg : p->hex);
         p->lat = (float)lat; p->lon = (float)lon;
         p->alt = cJSON_IsNumber(alt) ? alt->valueint : (int)num(a, "alt_geom", 0);
@@ -303,10 +306,26 @@ const route_t *adsb_route(const ac_t *a)
     return &r;
 }
 
+/* Aircraft tracked worldwide by the adsb.fi network */
+static void fetch_world(void)
+{
+    size_t len = 0;
+    int retry = 0;
+    if (plat_http_get("https://api.adsb.fi/v1/stats", buf, BUF_CAP - 1, &len, &retry) != 200) return;
+    buf[len] = 0;
+    cJSON *root = cJSON_Parse(buf);
+    int n = (int)num(root, "totalAircraft", 0);
+    cJSON_Delete(root);
+    if (n <= 0) return;
+    plat_lock(-1);
+    ui_world_count(n);
+    plat_unlock();
+}
+
 static void task(void *arg)
 {
     (void)arg;
-    uint32_t next = 0;
+    uint32_t next = 0, next_world = 0;
     for (;;) {
         char ssid[33], ip[16];
         int rssi;
@@ -323,6 +342,10 @@ static void task(void *arg)
             }
             plat_unlock();
             next = plat_ms() + POLL_MS;
+        }
+        if ((int32_t)(plat_ms() - next_world) >= 0) {
+            fetch_world();
+            next_world = plat_ms() + WORLD_MS;
         }
         plat_sleep_ms(serve_one_route() ? ROUTE_GAP_MS : 100);
     }

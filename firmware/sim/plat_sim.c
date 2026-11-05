@@ -90,6 +90,11 @@ static size_t on_header(char *p, size_t sz, size_t n, void *u)
 int plat_http_get(const char *url, char *buf, size_t cap, size_t *len, int *retry_after)
 {
     if (demo_json) {                                   /* demo mode: frozen traffic, one known route */
+        if (strstr(url, "/v1/stats")) {
+            const char *r = "{\"totalAircraft\":12477}";
+            *len = strlen(r); memcpy(buf, r, *len); *retry_after = 0; return 200;
+        }
+        if (strstr(url, "hexdb")) { *len = 0; *retry_after = 0; return 404; }
         if (!strstr(url, "adsbdb")) { size_t n = demo_len < cap ? demo_len : cap; memcpy(buf, demo_json, n); *len = n; *retry_after = 0; return 200; }
         if (strstr(url, "EZS1477")) {
             const char *r = "{\"response\":{\"flightroute\":{\"callsign_iata\":\"DS1477\",\"airline\":{\"name\":\"easyJet Switzerland\"},"

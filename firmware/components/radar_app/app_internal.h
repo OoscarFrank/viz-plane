@@ -32,6 +32,8 @@ typedef struct {
     int alt, vs;               /* ft, ft/min */
     ac_kind_t kind;
     float seen_pos;            /* age of the position at the API, s */
+    uint8_t db_flags;          /* readsb dbFlags: 1 = military */
+    char emergency[10];        /* readsb emergency: general, lifeguard, minfuel, nordo, unlawful, downed */
 } ac_t;
 
 typedef struct {
@@ -51,6 +53,7 @@ const route_t *adsb_route(const ac_t *a);                /* NULL if unknown or i
 void ui_apply_aircraft(const ac_t *list, int n, const char *source);
 void ui_fetch_failed(void);
 void ui_route_ready(const char *callsign);
+void ui_world_count(int n);                              /* aircraft tracked worldwide */
 
 /* Assets */
 LV_FONT_DECLARE(font_m12);
