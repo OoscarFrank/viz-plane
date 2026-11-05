@@ -212,7 +212,8 @@ static void update_panel(void)
         lv_label_set_text(p_from_n, r->from_city);
         lv_label_set_text(p_to_n, r->to_city);
         float da = gc_km(r->from_lat, r->from_lon, s->rlat, s->rlon), db = gc_km(s->rlat, s->rlon, r->to_lat, r->to_lon);
-        lv_bar_set_value(p_bar, da + db > 1 ? (int32_t)(da / (da + db) * 1000) : 0, LV_ANIM_OFF);
+        bool half = r->from[0] == '?' || r->to[0] == '?';      /* one end unknown: no progress */
+        lv_bar_set_value(p_bar, !half && da + db > 1 ? (int32_t)(da / (da + db) * 1000) : 0, LV_ANIM_OFF);
         if (r->flight[0] || r->airline[0])
             lv_label_set_text_fmt(p_line, "%s%s%s", r->flight, r->flight[0] && r->airline[0] ? " · " : "", r->airline);
     } else {

@@ -7,6 +7,7 @@
 #include "cJSON.h"
 #include "plat.h"
 #include "app_internal.h"
+#include "assets/airports.h"
 
 #define POLL_MS 10000
 #define BUF_CAP (160 * 1024)
@@ -116,6 +117,20 @@ static int fetch_once(const char **source)
     return -1;
 }
 
+static int cmp_icao(const void *k, const void *e) { return strncmp(k, ((const airport_t *)e)->icao, 4); }
+
+/* ICAO code -> displayed code (IATA if any), city, position. False if unknown. */
+static bool airport_fill(const char *icao, char *code, char *city, float *lat, float *lon)
+{
+    const airport_t *a = bsearch(icao, airports, airports_n, sizeof *airports, cmp_icao);
+    if (!a) return false;
+    snprintf(code, 5, "%s", a->iata[0] ? a->iata : a->icao);
+    snprintf(city, 24, "%s", a->city);
+    *lat = a->lat;
+    *lon = a->lon;
+    return true;
+}
+
 static void airport(cJSON *a, char *iata, char *city, float *lat, float *lon)
 {
     char tmp[64];
@@ -142,30 +157,53 @@ static bool serve_one_route(void)
     plat_unlock();
     if (idx < 0) return false;
 
+    /* 1. hexdb.io: route by callsign, kept up to date (adsbdb's are often stale) */
     char url[80];
-    snprintf(url, sizeof url, "https://api.adsbdb.com/v0/callsign/%s", call);
     size_t len = 0;
     int retry = 0;
-    uint32_t t0 = plat_ms();
-    int st = plat_http_get(url, buf, BUF_CAP - 1, &len, &retry);
-    printf("[radar] route %s: HTTP %d, %u bytes in %u ms\n", call, st, (unsigned)len, (unsigned)(plat_ms() - t0));
     route_t r = {0};
     bool found = false, done = true;
+    uint32_t t0 = plat_ms();
+    snprintf(url, sizeof url, "https://hexdb.io/api/v1/route/icao/%s", call);
+    int st = plat_http_get(url, buf, BUF_CAP - 1, &len, &retry);
     if (st == 200) {
+        buf[len] = 0;
+        cJSON *root = cJSON_Parse(buf);
+        char legs[64];
+        copy_str(legs, sizeof legs, cJSON_GetObjectItemCaseSensitive(root, "route"));
+        cJSON_Delete(root);
+        /* "LFSB-EDDM", or several legs "A-B-C": keep the first and last airports */
+        char *last = strrchr(legs, '-');
+        if (last && last - legs >= 4) {
+            legs[4] = 0;
+            found = airport_fill(legs, r.from, r.from_city, &r.from_lat, &r.from_lon) &&
+                    airport_fill(last + 1, r.to, r.to_city, &r.to_lat, &r.to_lon);
+        }
+    } else if (st != 404) {
+        done = false;                                   /* transient error: retry later */
+    }
+
+    /* 2. adsbdb: airline name, and the route when hexdb has none */
+    snprintf(url, sizeof url, "https://api.adsbdb.com/v0/callsign/%s", call);
+    int st2 = done ? plat_http_get(url, buf, BUF_CAP - 1, &len, &retry) : -1;
+    if (st2 == 200) {
         buf[len] = 0;
         cJSON *root = cJSON_Parse(buf);
         cJSON *fr = root ? cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(root, "response"), "flightroute") : NULL;
         if (fr) {
-            airport(cJSON_GetObjectItemCaseSensitive(fr, "origin"), r.from, r.from_city, &r.from_lat, &r.from_lon);
-            airport(cJSON_GetObjectItemCaseSensitive(fr, "destination"), r.to, r.to_city, &r.to_lat, &r.to_lon);
+            if (!found) {
+                airport(cJSON_GetObjectItemCaseSensitive(fr, "origin"), r.from, r.from_city, &r.from_lat, &r.from_lon);
+                airport(cJSON_GetObjectItemCaseSensitive(fr, "destination"), r.to, r.to_city, &r.to_lat, &r.to_lon);
+                found = r.from[0] && r.to[0];
+            }
             copy_str(r.airline, sizeof r.airline, cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(fr, "airline"), "name"));
             copy_str(r.flight, sizeof r.flight, cJSON_GetObjectItemCaseSensitive(fr, "callsign_iata"));
-            found = r.from[0] && r.to[0];
         }
         cJSON_Delete(root);
-    } else if (st != 404) {
-        done = false;                                   /* transient error: retry later */
     }
+    printf("[radar] route %s: hexdb %d, adsbdb %d -> %s-%s in %u ms\n", call, st, st2,
+           found ? r.from : "?", found ? r.to : "?", (unsigned)(plat_ms() - t0));
+
     plat_lock(-1);
     if (!strcmp(routes[idx].call, call)) {
         routes[idx].done = done;
@@ -229,12 +267,40 @@ bool adsb_route_pending(const char *callsign)
     return callsign[0] != 0;
 }
 
+#define BSL_LAT 47.5896f
+#define BSL_LON 7.5299f
+
+/* Departures from / arrivals to EuroAirport, read off the flight itself:
+ * low, close, climbing away from the airport or descending toward it. */
+static int bsl_movement(const ac_t *a)       /* +1 departure, -1 arrival, 0 neither */
+{
+    float d = gc_km(BSL_LAT, BSL_LON, a->lat, a->lon);
+    if (a->alt <= 0 || a->alt > 15000 || d > 60) return 0;
+    if (d < 3) return a->vs > 300 ? 1 : a->vs < -300 ? -1 : 0;
+    float away = bearing(BSL_LAT, BSL_LON, a->lat, a->lon);
+    float dh = fabsf(fmodf(away - a->trk + 540.0f, 360.0f) - 180.0f);
+    if (a->vs > 500 && dh < 70) return 1;
+    if (a->vs < -500 && dh > 110) return -1;
+    return 0;
+}
+
 const route_t *adsb_route(const ac_t *a)
 {
+    const route_t *db = NULL;
     for (int i = 0; i < ROUTE_CACHE; i++)
-        if (routes[i].done && routes[i].found && !strcmp(routes[i].call, a->call))
-            return route_plausible(&routes[i].r, a) ? &routes[i].r : NULL;
-    return NULL;
+        if (routes[i].done && routes[i].found && !strcmp(routes[i].call, a->call)) { db = &routes[i].r; break; }
+    int mv = bsl_movement(a);
+    if (db && route_plausible(db, a) && (mv == 0 || !strcmp(mv > 0 ? db->from : db->to, "BSL"))) return db;
+    if (mv == 0) return NULL;
+    /* the database is wrong or silent: keep the airport we are sure of, the other end is unknown */
+    static route_t r;
+    memset(&r, 0, sizeof r);
+    if (db) { memcpy(r.airline, db->airline, sizeof r.airline); memcpy(r.flight, db->flight, sizeof r.flight); }
+    snprintf(mv > 0 ? r.from : r.to, 5, "BSL");
+    snprintf(mv > 0 ? r.from_city : r.to_city, 24, "Bâle-Mulhouse");
+    snprintf(mv > 0 ? r.to : r.from, 5, "?");
+    if (mv > 0) { r.from_lat = BSL_LAT; r.from_lon = BSL_LON; } else { r.to_lat = BSL_LAT; r.to_lon = BSL_LON; }
+    return &r;
 }
 
 static void task(void *arg)

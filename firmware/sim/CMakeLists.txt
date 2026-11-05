@@ -22,7 +22,7 @@ target_compile_definitions(lvgl PUBLIC LV_CONF_INCLUDE_SIMPLE)
 target_compile_options(lvgl PRIVATE -w)
 
 add_executable(radar_sim main_sim.c plat_sim.c cjson/cJSON.c
-  ${APP}/ui.c ${APP}/adsb.c ${APP}/assets/map_bg.c ${APP}/assets/icons.c ${FONTS})
+  ${APP}/ui.c ${APP}/adsb.c ${APP}/assets/map_bg.c ${APP}/assets/icons.c ${APP}/assets/airports.c ${FONTS})
 target_include_directories(radar_sim PRIVATE ${APP} ${APP}/include cjson ${SDL2_INCLUDE_DIRS})
 target_link_directories(radar_sim PRIVATE ${SDL2_LIBRARY_DIRS})
 target_link_libraries(radar_sim PRIVATE lvgl ${SDL2_LIBRARIES} CURL::libcurl Threads::Threads m)
