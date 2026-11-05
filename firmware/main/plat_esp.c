@@ -15,7 +15,6 @@
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "board.h"
 #include "lvgl_port.h"
 #include "plat.h"
 #include "plat_esp.h"
@@ -34,11 +33,22 @@ void *plat_big_alloc(size_t n) { return heap_caps_malloc(n, MALLOC_CAP_SPIRAM | 
 void plat_big_free(void *p) { heap_caps_free(p); }
 bool plat_lock(int timeout_ms) { return lvgl_port_lock(timeout_ms); }
 void plat_unlock(void) { lvgl_port_unlock(); }
-void plat_backlight(bool on) { on ? board_backlight_on() : board_backlight_off(); }
 
 void plat_thread(void (*fn)(void *), void *arg, const char *name, uint32_t stack)
 {
     xTaskCreatePinnedToCore(fn, name, stack, arg, 3, NULL, 0);   /* LVGL runs on core 1 */
+}
+
+bool plat_local_date(int *wday, int *mday, int *mon)
+{
+    time_t now = time(NULL);
+    struct tm t;
+    localtime_r(&now, &t);
+    if (t.tm_year < 124) return false;
+    *wday = t.tm_wday;
+    *mday = t.tm_mday;
+    *mon = t.tm_mon;
+    return true;
 }
 
 bool plat_local_time(int *h, int *m)

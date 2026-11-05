@@ -16,12 +16,10 @@ typedef enum { NET_DOWN, NET_CONNECTING, NET_UP, NET_FAILED } plat_net_state_t;
 uint32_t plat_ms(void);
 void plat_sleep_ms(uint32_t ms);
 bool plat_local_time(int *hour, int *min);          /* false until the clock is synced */
+bool plat_local_date(int *wday, int *mday, int *mon); /* wday 0 = Sunday, mon 0 = January */
 void *plat_big_alloc(size_t n);                      /* large buffers (PSRAM on the ESP32) */
 void plat_big_free(void *p);
 void plat_thread(void (*fn)(void *), void *arg, const char *name, uint32_t stack_bytes);
-
-/* Screen backlight (LVGL thread) */
-void plat_backlight(bool on);
 
 /* LVGL lock (recursive): take it to touch the UI from another thread */
 bool plat_lock(int timeout_ms);

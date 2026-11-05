@@ -48,6 +48,15 @@ void plat_big_free(void *p) { free(p); }
 bool plat_lock(int timeout_ms) { (void)timeout_ms; return pthread_mutex_lock(&lock) == 0; }
 void plat_unlock(void) { pthread_mutex_unlock(&lock); }
 
+bool plat_local_date(int *wday, int *mday, int *mon)
+{
+    time_t now = time(NULL);
+    struct tm t;
+    localtime_r(&now, &t);
+    *wday = t.tm_wday; *mday = t.tm_mday; *mon = t.tm_mon;
+    return true;
+}
+
 bool plat_local_time(int *h, int *m)
 {
     time_t now = time(NULL);
@@ -144,8 +153,6 @@ void plat_wifi_connect(const char *ssid, const char *pw)
     net = NET_CONNECTING;
     plat_thread(connect_job, NULL, "connect", 0);
 }
-void plat_backlight(bool on) { (void)on; }       /* the black sleep overlay is enough on screen */
-
 void plat_wifi_forget(void) { saved = false; net = NET_DOWN; ssid_cur[0] = 0; }
 bool plat_wifi_has_saved(void) { return saved; }
 plat_net_state_t plat_wifi_info(char ssid[33], char ip[16], int *rssi)

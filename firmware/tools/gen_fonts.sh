@@ -15,3 +15,6 @@ gen font_m14 Montserrat-Medium.ttf 14 1
 gen font_s16 Montserrat-SemiBold.ttf 16 1
 gen font_s20 Montserrat-SemiBold.ttf 20 1
 gen font_b24 Montserrat-Bold.ttf 24 0
+# Screen saver: big rounded clock digits (Nunito Black, OFL)
+npx -y lv_font_conv@1.5.2 --no-compress --bpp 4 --size 340 --format lvgl --lv-include lvgl.h \
+  --font Nunito-Black.woff -r 0x30-0x39 -o $OUT/font_clock.c

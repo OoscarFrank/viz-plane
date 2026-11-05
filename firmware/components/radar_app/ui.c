@@ -846,37 +846,15 @@ static void scan(void)
 static void scan_cb(lv_event_t *e) { (void)e; scan(); }
 static void wifi_back_cb(lv_event_t *e) { (void)e; lv_obj_add_flag(wifi_scr, LV_OBJ_FLAG_HIDDEN); }
 
-/* ---------- sleep: backlight off, no polling, a tap anywhere wakes it up ---------- */
-static lv_obj_t *sleep_ov;
-
-static void wake_cb(lv_event_t *e)
-{
-    (void)e;
-    lv_obj_add_flag(sleep_ov, LV_OBJ_FLAG_HIDDEN);
-    plat_backlight(true);
-    app_sleeping = false;
-    adsb_wake();
-}
+/* ---------- sleep: the screen saver takes over, a tap goes back to the map ---------- */
+static void saver_show(void);
 
 static void sleep_cb(lv_event_t *e)
 {
     (void)e;
-    if (!sleep_ov) {
-        sleep_ov = lv_obj_create(lv_layer_top());
-        lv_obj_remove_style_all(sleep_ov);
-        lv_obj_set_size(sleep_ov, SCR_W, 480);
-        lv_obj_set_style_bg_color(sleep_ov, lv_color_black(), 0);
-        lv_obj_set_style_bg_opa(sleep_ov, LV_OPA_COVER, 0);
-        lv_obj_add_flag(sleep_ov, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_add_event_cb(sleep_ov, wake_cb, LV_EVENT_CLICKED, NULL);
-        lv_obj_t *l = label(sleep_ov, &font_m14, lv_color_hex(0x30444b), "En veille · touchez l'écran pour réveiller");
-        lv_obj_center(l);
-    }
     lv_obj_add_flag(wifi_scr, LV_OBJ_FLAG_HIDDEN);
     if (selected >= 0) close_panel();
-    lv_obj_clear_flag(sleep_ov, LV_OBJ_FLAG_HIDDEN);
-    app_sleeping = true;
-    plat_backlight(false);
+    saver_show();
 }
 
 static void open_wifi(void)
@@ -1118,12 +1096,101 @@ static void set_chip(const char *txt, lv_color_t bg)
     lv_obj_set_style_bg_color(chip, bg, 0);
 }
 
+/* ---------- screen saver (sleep mode): a big clock on black, the worldwide count below ---------- */
+static lv_obj_t *sv, *sv_box, *sv_dig[4], *sv_dot[2], *sv_world;
+static int sv_min = -1;
+
+static void saver_hide(lv_event_t *e)
+{
+    (void)e;
+    lv_obj_add_flag(sv, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void build_saver(void)
+{
+    /* overlapping rounded digits in two blues, translucent so the overlaps show; two light dots for the colon */
+    static const uint32_t COL[4] = {0x1c4384, 0x4a6c95, 0x23498a, 0x547396};   /* dimmed: the backlight is on/off only */
+    sv = lv_obj_create(lv_layer_top());
+    lv_obj_remove_style_all(sv);
+    lv_obj_set_size(sv, SCR_W, 480);
+    lv_obj_set_style_bg_color(sv, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(sv, LV_OPA_COVER, 0);
+    lv_obj_add_flag(sv, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(sv, saver_hide, LV_EVENT_CLICKED, NULL);
+    sv_box = lv_obj_create(sv);
+    lv_obj_remove_style_all(sv_box);
+    lv_obj_set_size(sv_box, SCR_W, 480);
+    lv_obj_clear_flag(sv_box, LV_OBJ_FLAG_CLICKABLE);
+    for (int i = 0; i < 4; i++) {
+        sv_dig[i] = label(sv_box, &font_clock, lv_color_hex(COL[i]), "");
+        lv_obj_set_style_text_opa(sv_dig[i], 225, 0);
+    }
+    for (int i = 0; i < 2; i++) {
+        sv_dot[i] = lv_obj_create(sv_box);
+        lv_obj_remove_style_all(sv_dot[i]);
+        lv_obj_set_size(sv_dot[i], 46, 46);
+        lv_obj_set_style_radius(sv_dot[i], LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_bg_color(sv_dot[i], lv_color_hex(0x868a8f), 0);
+        lv_obj_set_style_bg_opa(sv_dot[i], 235, 0);
+    }
+    sv_world = label(sv_box, &font_s20, lv_color_hex(0x535b64), "");
+}
+
+static void saver_update(void)
+{
+    int h, m;
+    if (!plat_local_time(&h, &m)) h = m = 0;
+    if (h * 60 + m != sv_min) {                       /* redraw once a minute; the whole clock drifts a little */
+        sv_min = h * 60 + m;
+        static const int8_t DX[] = {0, 8, 0, -8}, DY[] = {-6, 0, 6, 0};
+        lv_obj_set_pos(sv_box, DX[m % 4], DY[m % 4]);
+        char d[4] = {(char)('0' + h / 10), (char)('0' + h % 10), (char)('0' + m / 10), (char)('0' + m % 10)};
+        const int STEP = 148, GAP = 178, Y = 78;     /* digits ~185 px wide: neighbours overlap */
+        bool one = h < 10;                            /* 9:05, not 09:05 */
+        int w = (one ? 0 : STEP) + GAP + STEP + 185;
+        int x = (SCR_W - w) / 2;
+        for (int i = 0; i < 4; i++) {
+            if (i == 0 && one) { lv_obj_add_flag(sv_dig[0], LV_OBJ_FLAG_HIDDEN); continue; }
+            lv_obj_clear_flag(sv_dig[i], LV_OBJ_FLAG_HIDDEN);
+            char t[2] = {d[i], 0};
+            lv_label_set_text(sv_dig[i], t);
+            lv_obj_set_pos(sv_dig[i], x, Y);
+            if (i == 1) {                             /* colon centred in the wider gap */
+                int cx = x + 185 + (GAP - 185) / 2;
+                lv_obj_set_pos(sv_dot[0], cx - 23, Y + 62);
+                lv_obj_set_pos(sv_dot[1], cx - 23, Y + 150);
+            }
+            x += i == 1 ? GAP : STEP;
+        }
+    }
+    if (world_n > 0) {
+        char w[16];
+        thousands(w, sizeof w, world_n);
+        lv_label_set_text_fmt(sv_world, "%s avions dans le monde", w);
+        lv_obj_align(sv_world, LV_ALIGN_TOP_MID, 0, 372);
+    }
+}
+
+static void saver_show(void)
+{
+    if (!sv) build_saver();
+    lv_obj_clear_flag(sv, LV_OBJ_FLAG_HIDDEN);
+    sv_min = -1;
+    saver_update();
+}
+
+static void saver_tick(void)
+{
+    if (sv && !lv_obj_has_flag(sv, LV_OBJ_FLAG_HIDDEN)) saver_update();
+}
+
 static void tick(lv_timer_t *t)
 {
     (void)t;
     static uint32_t n;
     n++;
     layout();
+    saver_tick();
     if (selected >= 0) update_panel();
     if (!lv_obj_has_flag(list_panel, LV_OBJ_FLAG_HIDDEN) && n % 4 == 0 && !lv_obj_has_state(list_rows, LV_STATE_PRESSED)) render_list();
 

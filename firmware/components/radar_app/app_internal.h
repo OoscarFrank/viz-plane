@@ -45,8 +45,6 @@ typedef struct {
 
 /* adsb.c */
 void adsb_start(void);
-extern volatile bool app_sleeping;                       /* screen asleep: no polling */
-void adsb_wake(void);                                    /* poll now */
 void adsb_request_route(const char *callsign, bool urgent);  /* LVGL lock held */
 bool adsb_route_pending(const char *callsign);           /* lookup not answered yet; LVGL lock held */
 const route_t *adsb_route(const ac_t *a);                /* NULL if unknown or implausible; LVGL lock held */
@@ -63,6 +61,7 @@ LV_FONT_DECLARE(font_m14);
 LV_FONT_DECLARE(font_s16);
 LV_FONT_DECLARE(font_s20);
 LV_FONT_DECLARE(font_b24);
+LV_FONT_DECLARE(font_clock);
 LV_IMG_DECLARE(img_map_bg);
 LV_IMG_DECLARE(img_jet);
 LV_IMG_DECLARE(img_jet_ol);

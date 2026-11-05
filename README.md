@@ -77,3 +77,5 @@ ADS-B positions come from the free community networks [adsb.lol](https://adsb.lo
 - cJSON: MIT
 - Hardware layer from the Waveshare example: CC0
 - Montserrat fonts: SIL Open Font License
+- Nunito font (screen saver clock): SIL Open Font License
+- Airport table: OurAirports (public domain)
