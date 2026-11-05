@@ -16,7 +16,7 @@ The on-screen interface is in French.
 |---|---|---|---|
 | ![Flight card](docs/screenshots/flight-card.png) | ![List](docs/screenshots/list.png) | ![Wi-Fi](docs/screenshots/wifi.png) | ![Keyboard](docs/screenshots/keyboard.png) |
 
-Screenshots from the Mac simulator, with demo traffic. The firmware has not run on the real screen yet.
+Screenshots from the Mac simulator, with demo traffic. The firmware runs on the real board.
 
 ## Hardware
 

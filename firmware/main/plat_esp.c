@@ -24,6 +24,7 @@ static esp_netif_t *sta;
 static volatile plat_net_state_t net = NET_DOWN;
 static volatile bool user_connect;   /* connection started from the Wi-Fi screen */
 static int retries;
+static volatile bool scanning;      /* auto-reconnect paused: the driver refuses to scan while connecting */
 static bool sntp_started;
 
 uint32_t plat_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
@@ -65,24 +66,66 @@ static esp_err_t http_ev(esp_http_client_event_t *e)
     return ESP_OK;
 }
 
-int plat_http_get(const char *url, char *buf, size_t cap, size_t *len, int *retry_after)
+/* One kept-alive connection per host: a TLS handshake costs ~2 s on the ESP32.
+ * Only the data thread makes requests, so no locking. */
+#define HTTP_CONNS 3
+static struct { char host[48]; esp_http_client_handle_t h; } conns[HTTP_CONNS];
+static int conn_next;
+
+static esp_http_client_handle_t conn_for(const char *url, http_ctx_t *c)
 {
-    http_ctx_t c = {.buf = buf, .cap = cap};
+    const char *p = strstr(url, "://");
+    p = p ? p + 3 : url;
+    char host[48];
+    size_t n = strcspn(p, "/");
+    snprintf(host, sizeof host, "%.*s", (int)(n < sizeof host ? n : sizeof host - 1), p);
+    for (int i = 0; i < HTTP_CONNS; i++)
+        if (conns[i].h && !strcmp(conns[i].host, host)) {
+            esp_http_client_set_url(conns[i].h, url);
+            esp_http_client_set_user_data(conns[i].h, c);
+            return conns[i].h;
+        }
+    int i = conn_next;
+    conn_next = (conn_next + 1) % HTTP_CONNS;
+    if (conns[i].h) esp_http_client_cleanup(conns[i].h);
     esp_http_client_config_t cfg = {
         .url = url,
         .event_handler = http_ev,
-        .user_data = &c,
+        .user_data = c,
         .crt_bundle_attach = esp_crt_bundle_attach,
         .timeout_ms = 8000,
         .user_agent = "radar-mulhouse-bale/1.0",
         .buffer_size = 2048,
+        .keep_alive_enable = true,
     };
-    esp_http_client_handle_t h = esp_http_client_init(&cfg);
-    esp_http_client_set_header(h, "Accept", "application/json");
+    conns[i].h = esp_http_client_init(&cfg);
+    snprintf(conns[i].host, sizeof conns[i].host, "%s", host);
+    esp_http_client_set_header(conns[i].h, "Accept", "application/json");
+    return conns[i].h;
+}
+
+static void conn_drop(esp_http_client_handle_t h)
+{
+    for (int i = 0; i < HTTP_CONNS; i++)
+        if (conns[i].h == h) { esp_http_client_cleanup(h); conns[i].h = NULL; conns[i].host[0] = 0; }
+}
+
+int plat_http_get(const char *url, char *buf, size_t cap, size_t *len, int *retry_after)
+{
+    http_ctx_t c = {.buf = buf, .cap = cap};
+    esp_http_client_handle_t h = conn_for(url, &c);
     esp_err_t err = esp_http_client_perform(h);
+    if (err != ESP_OK) {                        /* the server may have closed the idle connection: retry once, fresh */
+        conn_drop(h);
+        c = (http_ctx_t){.buf = buf, .cap = cap};
+        h = conn_for(url, &c);
+        err = esp_http_client_perform(h);
+    }
     int st = err == ESP_OK ? esp_http_client_get_status_code(h) : -1;
-    if (err != ESP_OK) ESP_LOGW(TAG, "GET %s : %s", url, esp_err_to_name(err));
-    esp_http_client_cleanup(h);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "GET %s : %s", url, esp_err_to_name(err));
+        conn_drop(h);
+    }
     *len = c.len;
     *retry_after = c.retry_after;
     return st;
@@ -93,12 +136,18 @@ static void on_wifi(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
     (void)arg;
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
-        if (plat_wifi_has_saved()) { net = NET_CONNECTING; esp_wifi_connect(); }
+        wifi_config_t c = {0};
+        esp_wifi_get_config(WIFI_IF_STA, &c);
+        ESP_LOGI(TAG, "saved network: \"%s\"", (char *)c.sta.ssid);
+        if (c.sta.ssid[0]) { net = NET_CONNECTING; esp_wifi_connect(); }
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         wifi_event_sta_disconnected_t *d = data;
         bool auth = d->reason == WIFI_REASON_AUTH_FAIL || d->reason == WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT ||
                     d->reason == WIFI_REASON_HANDSHAKE_TIMEOUT || d->reason == WIFI_REASON_NO_AP_FOUND;
-        if (user_connect && (auth || ++retries > 3)) {
+        ESP_LOGI(TAG, "disconnected, reason %d", d->reason);
+        if (scanning) {
+            net = NET_DOWN;
+        } else if (user_connect && (auth || ++retries > 3)) {
             user_connect = false;
             net = NET_FAILED;
             app_wifi_event(NET_FAILED);
@@ -124,8 +173,11 @@ static void on_wifi(void *arg, esp_event_base_t base, int32_t id, void *data)
         wifi_ap_record_t *rec = calloc(n, sizeof *rec);
         plat_ap_t *aps = calloc(24, sizeof *aps);
         int m = 0;
-        if (rec && aps && esp_wifi_scan_get_ap_records(&n, rec) == ESP_OK) {
+        esp_err_t err = rec && aps ? esp_wifi_scan_get_ap_records(&n, rec) : ESP_ERR_NO_MEM;
+        ESP_LOGI(TAG, "scan done: %s, %u access points", esp_err_to_name(err), err == ESP_OK ? n : 0);
+        if (err == ESP_OK) {
             for (int i = 0; i < n && m < 24; i++) {          /* already sorted by decreasing signal */
+                ESP_LOGI(TAG, "  ch%2d %4d dBm  %s", rec[i].primary, rec[i].rssi, (char *)rec[i].ssid);
                 if (!rec[i].ssid[0]) continue;
                 bool dup = false;
                 for (int j = 0; j < m && !dup; j++) dup = !strcmp(aps[j].ssid, (char *)rec[i].ssid);
@@ -139,6 +191,10 @@ static void on_wifi(void *arg, esp_event_base_t base, int32_t id, void *data)
         app_wifi_scan_done(aps, m);
         free(rec);
         free(aps);
+        if (scanning) {
+            scanning = false;
+            if (net != NET_UP && !user_connect && plat_wifi_has_saved()) { net = NET_CONNECTING; esp_wifi_connect(); }
+        }
     }
 }
 
@@ -150,8 +206,17 @@ bool plat_wifi_has_saved(void)
 
 void plat_wifi_scan(void)
 {
-    wifi_scan_config_t sc = {.show_hidden = false};
-    if (esp_wifi_scan_start(&sc, false) != ESP_OK) app_wifi_scan_done(NULL, 0);
+    wifi_scan_config_t sc = {.scan_time.active = {.min = 100, .max = 300}};
+    if (net != NET_UP) {
+        scanning = true;
+        esp_wifi_disconnect();
+    }
+    esp_err_t err = esp_wifi_scan_start(&sc, false);
+    ESP_LOGI(TAG, "scan start: %s", esp_err_to_name(err));
+    if (err != ESP_OK) {
+        scanning = false;
+        app_wifi_scan_done(NULL, 0);
+    }
 }
 
 void plat_wifi_connect(const char *ssid, const char *password)
@@ -162,6 +227,7 @@ void plat_wifi_connect(const char *ssid, const char *password)
     c.sta.threshold.authmode = password[0] ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN;
     c.sta.pmf_cfg.capable = true;
     user_connect = true;
+    scanning = false;
     retries = 0;
     net = NET_CONNECTING;
     esp_wifi_disconnect();
@@ -211,3 +277,4 @@ void plat_esp_init(void)
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_start());
 }
+

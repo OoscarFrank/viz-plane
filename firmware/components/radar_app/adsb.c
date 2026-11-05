@@ -1,5 +1,6 @@
 /* Data thread: ADS-B aircraft (adsb.lol, adsb.fi, airplanes.live) and routes (adsbdb).
  * Same logic as radar.py: fall back between providers, back off after a 429. */
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -9,7 +10,8 @@
 
 #define POLL_MS 10000
 #define BUF_CAP (160 * 1024)
-#define ROUTE_CACHE 24
+#define ROUTE_CACHE 96       /* > MAX_AC: every aircraft in view keeps its route */
+#define ROUTE_GAP_MS 250     /* spacing between adsbdb requests */
 
 typedef struct { const char *name; const char *url; uint32_t pause_until; int strikes; } provider_t;
 
@@ -20,7 +22,7 @@ static provider_t providers[] = {
 };
 #define NPROV (int)(sizeof providers / sizeof providers[0])
 
-typedef struct { char call[9]; bool done; bool found; route_t r; uint32_t retry_at; } route_slot_t;
+typedef struct { char call[9]; bool done; bool found; bool urgent; route_t r; uint32_t retry_at; } route_slot_t;
 static route_slot_t routes[ROUTE_CACHE];    /* guarded by the LVGL lock */
 static int route_next;
 
@@ -126,24 +128,27 @@ static void airport(cJSON *a, char *iata, char *city, float *lat, float *lon)
     *lon = (float)num(a, "longitude", 0);
 }
 
-/* Picks a pending route (lock held), then queries it (lock released). */
-static void serve_one_route(void)
+/* Picks a pending route, the tapped aircraft first (lock held), then queries it (lock released).
+ * Returns false when nothing is pending. */
+static bool serve_one_route(void)
 {
     char call[9] = "";
     int idx = -1;
     plat_lock(-1);
     for (int i = 0; i < ROUTE_CACHE; i++)
-        if (routes[i].call[0] && !routes[i].done && (int32_t)(plat_ms() - routes[i].retry_at) >= 0) {
-            idx = i; snprintf(call, sizeof call, "%s", routes[i].call); break;
-        }
+        if (routes[i].call[0] && !routes[i].done && (int32_t)(plat_ms() - routes[i].retry_at) >= 0 &&
+            (idx < 0 || (routes[i].urgent && !routes[idx].urgent))) idx = i;
+    if (idx >= 0) snprintf(call, sizeof call, "%s", routes[idx].call);
     plat_unlock();
-    if (idx < 0) return;
+    if (idx < 0) return false;
 
     char url[80];
     snprintf(url, sizeof url, "https://api.adsbdb.com/v0/callsign/%s", call);
     size_t len = 0;
     int retry = 0;
+    uint32_t t0 = plat_ms();
     int st = plat_http_get(url, buf, BUF_CAP - 1, &len, &retry);
+    printf("[radar] route %s: HTTP %d, %u bytes in %u ms\n", call, st, (unsigned)len, (unsigned)(plat_ms() - t0));
     route_t r = {0};
     bool found = false, done = true;
     if (st == 200) {
@@ -170,22 +175,65 @@ static void serve_one_route(void)
         if (done) ui_route_ready(call);
     }
     plat_unlock();
+    return true;
 }
 
-void adsb_request_route(const char *callsign)
+void adsb_request_route(const char *callsign, bool urgent)
 {
     if (!callsign[0] || strlen(callsign) > 8) return;
-    for (int i = 0; i < ROUTE_CACHE; i++) if (!strcmp(routes[i].call, callsign)) return;
+    for (int i = 0; i < ROUTE_CACHE; i++)
+        if (!strcmp(routes[i].call, callsign)) {
+            if (urgent && !routes[i].done) { routes[i].urgent = true; routes[i].retry_at = plat_ms(); }
+            return;
+        }
     route_slot_t *s = &routes[route_next];
     route_next = (route_next + 1) % ROUTE_CACHE;
     memset(s, 0, sizeof *s);
     snprintf(s->call, sizeof s->call, "%s", callsign);
+    s->urgent = urgent;
+    s->retry_at = plat_ms();
 }
 
-const route_t *adsb_route(const char *callsign)
+#define RAD(d) ((d) * 0.017453293f)
+
+static float gc_km(float lat1, float lon1, float lat2, float lon2)
+{
+    float a = sinf(RAD(lat2 - lat1) / 2), b = sinf(RAD(lon2 - lon1) / 2);
+    return 12742.0f * asinf(sqrtf(a * a + cosf(RAD(lat1)) * cosf(RAD(lat2)) * b * b));
+}
+
+static float bearing(float lat1, float lon1, float lat2, float lon2)
+{
+    float y = sinf(RAD(lon2 - lon1)) * cosf(RAD(lat2));
+    float x = cosf(RAD(lat1)) * sinf(RAD(lat2)) - sinf(RAD(lat1)) * cosf(RAD(lat2)) * cosf(RAD(lon2 - lon1));
+    return atan2f(y, x) / 0.017453293f;
+}
+
+/* Callsign route databases are often stale (callsigns get reused for other routes).
+ * Keep a route only if the aircraft lies on it and flies toward the destination. */
+static bool route_plausible(const route_t *r, const ac_t *a)
+{
+    float da = gc_km(r->from_lat, r->from_lon, a->lat, a->lon);
+    float db = gc_km(a->lat, a->lon, r->to_lat, r->to_lon);
+    float d = gc_km(r->from_lat, r->from_lon, r->to_lat, r->to_lon);
+    if (d < 1 || da + db > d * 1.15f + 30) return false;          /* off the great circle */
+    if (da < 100 || db < 100) return true;                        /* climbing out or on approach: any heading */
+    float dh = fabsf(fmodf(bearing(a->lat, a->lon, r->to_lat, r->to_lon) - a->trk + 540.0f, 360.0f) - 180.0f);
+    return dh < 100;                                              /* not flying away from the destination */
+}
+
+bool adsb_route_pending(const char *callsign)
 {
     for (int i = 0; i < ROUTE_CACHE; i++)
-        if (routes[i].done && routes[i].found && !strcmp(routes[i].call, callsign)) return &routes[i].r;
+        if (!strcmp(routes[i].call, callsign)) return !routes[i].done;
+    return callsign[0] != 0;
+}
+
+const route_t *adsb_route(const ac_t *a)
+{
+    for (int i = 0; i < ROUTE_CACHE; i++)
+        if (routes[i].done && routes[i].found && !strcmp(routes[i].call, a->call))
+            return route_plausible(&routes[i].r, a) ? &routes[i].r : NULL;
     return NULL;
 }
 
@@ -201,13 +249,16 @@ static void task(void *arg)
             const char *src = NULL;
             int n = fetch_once(&src);
             plat_lock(-1);
-            if (n >= 0) ui_apply_aircraft(parsed, n, src);
-            else ui_fetch_failed();
+            if (n >= 0) {
+                ui_apply_aircraft(parsed, n, src);
+                for (int i = 0; i < n; i++) adsb_request_route(parsed[i].call, false);   /* prefetch */
+            } else {
+                ui_fetch_failed();
+            }
             plat_unlock();
             next = plat_ms() + POLL_MS;
         }
-        serve_one_route();
-        plat_sleep_ms(400);
+        plat_sleep_ms(serve_one_route() ? ROUTE_GAP_MS : 100);
     }
 }
 

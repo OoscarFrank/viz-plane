@@ -205,7 +205,7 @@ static void update_panel(void)
     lv_label_set_text(p_phase, phase(a));
     lv_obj_set_style_text_color(p_phase, alt_color(a->alt), 0);
 
-    const route_t *r = adsb_route(a->call);
+    const route_t *r = adsb_route(a);
     if (r) {
         lv_label_set_text(p_from, r->from);
         lv_label_set_text(p_to, r->to);
@@ -218,7 +218,7 @@ static void update_panel(void)
     } else {
         lv_label_set_text(p_from, "—");
         lv_label_set_text(p_to, "—");
-        lv_label_set_text(p_from_n, plat_ms() - s->route_asked < 15000 ? "Recherche de la route…" : "Route inconnue");
+        lv_label_set_text(p_from_n, adsb_route_pending(a->call) && plat_ms() - s->route_asked < 15000 ? "Recherche de la route…" : "Route inconnue");
         lv_label_set_text(p_to_n, "");
         lv_bar_set_value(p_bar, 0, LV_ANIM_OFF);
     }
@@ -258,7 +258,7 @@ static void open_panel(int i)
     lv_obj_move_foreground(s->ol);
     lv_obj_move_foreground(s->ic);
     lv_obj_move_foreground(s->lbl);
-    adsb_request_route(s->d.call);
+    adsb_request_route(s->d.call, true);
     s->route_asked = plat_ms();
     update_panel();
 }
@@ -375,7 +375,7 @@ static void render_list(void)
         else { thousands(sub, sizeof sub, (s->d.alt + 50) / 100 * 100); snprintf(alt, sizeof alt, "%s ft", sub); }
         lv_obj_t *al = label(r, &font_s16, C_FG, alt);
         lv_obj_align(al, LV_ALIGN_TOP_RIGHT, -12, 7);
-        const route_t *rt = adsb_route(s->d.call);
+        const route_t *rt = adsb_route(&s->d);
         int km = (int)lroundf(dist_km(s->rlat, s->rlon, MUL_LAT, MUL_LON));
         if (rt) snprintf(sub, sizeof sub, "%s → %s · %d km", rt->from, rt->to, km);
         else snprintf(sub, sizeof sub, "%s · %d km", s->d.type[0] ? s->d.type : "?", km);

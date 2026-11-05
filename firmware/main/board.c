@@ -112,12 +112,13 @@ static void waveshare_esp32_s3_touch_reset(void)
     i2c_master_write_to_device(I2C_MASTER_NUM, 0x24, &write_buf, 1, I2C_MASTER_TIMEOUT_MS / portTICK_PERIOD_MS);
 
     // Reset the touch screen. It is recommended to reset the touch screen before using it.
-    write_buf = 0x2C;
+    // EXIO5 (USB_SEL) stays low: high switches GPIO19/20 to CAN and drops the USB port.
+    write_buf = 0x1C;
     i2c_master_write_to_device(I2C_MASTER_NUM, 0x38, &write_buf, 1, I2C_MASTER_TIMEOUT_MS / portTICK_PERIOD_MS);
     esp_rom_delay_us(100 * 1000);
     gpio_set_level(GPIO_INPUT_IO_4, 0);
     esp_rom_delay_us(100 * 1000);
-    write_buf = 0x2E;
+    write_buf = 0x1E;
     i2c_master_write_to_device(I2C_MASTER_NUM, 0x38, &write_buf, 1, I2C_MASTER_TIMEOUT_MS / portTICK_PERIOD_MS);
     esp_rom_delay_us(200 * 1000);
 }

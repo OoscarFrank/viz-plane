@@ -43,8 +43,9 @@ typedef struct {
 
 /* adsb.c */
 void adsb_start(void);
-void adsb_request_route(const char *callsign);           /* LVGL lock held */
-const route_t *adsb_route(const char *callsign);         /* NULL if unknown; LVGL lock held */
+void adsb_request_route(const char *callsign, bool urgent);  /* LVGL lock held */
+bool adsb_route_pending(const char *callsign);           /* lookup not answered yet; LVGL lock held */
+const route_t *adsb_route(const ac_t *a);                /* NULL if unknown or implausible; LVGL lock held */
 
 /* ui.c: called by adsb.c, LVGL lock held */
 void ui_apply_aircraft(const ac_t *list, int n, const char *source);

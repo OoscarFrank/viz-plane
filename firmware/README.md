@@ -8,10 +8,18 @@ ESP-IDF 5.4 + LVGL 8.4. The app (`components/radar_app`) is the same on the scre
 . ~/esp/esp-idf/export.sh
 cd firmware
 idf.py build
-idf.py -p /dev/cu.usbmodem* flash monitor     # board plugged in over USB-C
+idf.py -p /dev/cu.usbmodem* flash monitor     # USB-C port marked "USB"
 ```
 
-If flashing fails on one USB-C port, try the other one. On first boot the Wi-Fi screen opens; the network is then remembered.
+Use the port marked **USB** (native USB of the ESP32-S3); the **UART** port is not wired to the console. The first time, the factory demo keeps that port off: unplug, hold **BOOT**, plug in, release. Our firmware keeps the USB/CAN switch on USB, so later flashes need no button.
+
+If the board drops back into download mode after flashing (black screen), flash with a watchdog reset instead:
+
+```sh
+cd build && esptool.py --chip esp32s3 -p /dev/cu.usbmodem* -b 460800 --after watchdog_reset write_flash @flash_args
+```
+
+On first boot the Wi-Fi screen opens; the network is then remembered.
 
 ## Mac simulator
 
@@ -38,6 +46,10 @@ The mouse acts as a finger. In the simulator, any 8-character password "connects
 - Screen upside down in the case: set `CONFIG_EXAMPLE_LVGL_PORT_ROTATION_180=y` in `sdkconfig.defaults`, then run `idf.py fullclean build`.
 - Polling interval: `POLL_MS` in `components/radar_app/adsb.c` (10 s).
 
-## Not verified on the board yet
+## Notes from the board bring-up
 
-Everything builds and runs in the simulator, but nothing has run on the real screen yet: display, touch, Wi-Fi, HTTPS, smoothness and orientation still need testing once the board arrives.
+- Display, touch, Wi-Fi, HTTPS and live aircraft work on the real board.
+- The CH422G pin EXIO5 selects USB (low) or CAN (high) on GPIO19/20: keep it low or the USB port disappears.
+- The factory demo leaves a Wi-Fi network ("WSCSBZY") in NVS; scans pause auto-reconnect so it does not block them.
+- Wi-Fi reception is weak with the module's PCB antenna: keep metal away from it in the enclosure.
+- Routes come from adsbdb by callsign and are often stale: a route is shown only if the aircraft lies on it and flies toward the destination. Routes of every aircraft in view are prefetched over kept-alive HTTPS connections.
