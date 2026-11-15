@@ -772,6 +772,10 @@ void app_wifi_scan_done(const plat_ap_t *list, int n)
 
 void app_wifi_event(plat_net_state_t st) { wifi_ev = st; }
 
+static char upd_msg[64];
+static volatile bool upd_ready;
+void app_update_status(const char *msg) { snprintf(upd_msg, sizeof upd_msg, "%s", msg); upd_ready = true; }
+
 static void render_wifi_side(void);
 static void open_pw(const char *ssid);
 
@@ -867,6 +871,13 @@ static void open_wifi(void)
 
 static void wifi_btn_cb(lv_event_t *e) { (void)e; open_wifi(); }
 
+static void update_cb(lv_event_t *e)
+{
+    (void)e;
+    toast_ex("Recherche d'une mise à jour…", 4000, -1, C_LINE);
+    plat_update_check();
+}
+
 static void forget_cb(lv_event_t *e)
 {
     (void)e;
@@ -900,6 +911,9 @@ static void render_wifi_side(void)
         lv_obj_t *sp = lv_obj_create(wifi_side);
         lv_obj_remove_style_all(sp);
         lv_obj_set_flex_grow(sp, 1);
+        lv_obj_t *v = label(wifi_side, &font_m12, C_DIM, "");
+        lv_label_set_text_fmt(v, "Version %s", plat_version());
+        button(wifi_side, LV_SYMBOL_REFRESH "  Mise à jour", 226, 44, false, update_cb, NULL);
         button(wifi_side, "Oublier ce réseau", 226, 44, false, forget_cb, NULL);
         button(wifi_side, LV_SYMBOL_EYE_CLOSE "  Mettre en veille", 226, 44, true, sleep_cb, NULL);
     } else {
@@ -1227,6 +1241,10 @@ static void tick(lv_timer_t *t)
 static void events(lv_timer_t *t)
 {
     (void)t;
+    if (upd_ready) {
+        upd_ready = false;
+        toast_ex(upd_msg, 6000, -1, C_ACCENT);
+    }
     if (aps_ready) {
         aps_ready = false;
         if (!lv_obj_has_flag(wifi_scr, LV_OBJ_FLAG_HIDDEN)) render_wifi_list();

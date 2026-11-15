@@ -1,0 +1,35 @@
+# Builds the firmware for every version tag (vX.Y.Z) and publishes it as a GitHub release.
+# The screens download radar.bin from the latest release (see firmware/main/ota.c).
+name: Release firmware
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set the firmware version from the tag
+        run: echo "${GITHUB_REF_NAME}" > firmware/version.txt
+
+      - name: Build with ESP-IDF
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.4.2
+          target: esp32s3
+          path: firmware
+          command: idf.py build && cd build && esptool.py --chip esp32s3 merge_bin -o radar-full.bin @flash_args
+
+      - name: Publish the release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            firmware/build/radar.bin
+            firmware/build/radar-full.bin

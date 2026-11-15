@@ -36,6 +36,11 @@ void plat_wifi_forget(void);
 bool plat_wifi_has_saved(void);
 plat_net_state_t plat_wifi_info(char ssid[33], char ip[16], int *rssi);
 
+/* Firmware version and updates */
+const char *plat_version(void);
+void plat_update_check(void);                       /* check GitHub for a newer release now */
+
 /* Implemented by the app */
 void app_wifi_scan_done(const plat_ap_t *aps, int n);
 void app_wifi_event(plat_net_state_t state);
+void app_update_status(const char *msg);            /* update progress, from any thread */

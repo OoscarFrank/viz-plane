@@ -6,3 +6,4 @@ firmware/sdkconfig
 firmware/sdkconfig.old
 firmware/managed_components/
 firmware/tools/map_bg_preview.png
+firmware/version.txt

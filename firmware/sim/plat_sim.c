@@ -48,6 +48,9 @@ void plat_big_free(void *p) { free(p); }
 bool plat_lock(int timeout_ms) { (void)timeout_ms; return pthread_mutex_lock(&lock) == 0; }
 void plat_unlock(void) { pthread_mutex_unlock(&lock); }
 
+const char *plat_version(void) { return "simulateur"; }
+void plat_update_check(void) { app_update_status("Pas de mise à jour dans le simulateur"); }
+
 bool plat_local_date(int *wday, int *mday, int *mon)
 {
     time_t now = time(NULL);

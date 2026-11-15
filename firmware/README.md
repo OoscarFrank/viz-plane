@@ -21,6 +21,18 @@ cd build && esptool.py --chip esp32s3 -p /dev/cu.usbmodem* -b 460800 --after wat
 
 On first boot the Wi-Fi screen opens; the network is then remembered.
 
+## Releases and over-the-air updates
+
+Push a version tag and GitHub Actions builds the firmware and publishes it as a release:
+
+```sh
+git tag v1.2.0 && git push origin v1.2.0
+```
+
+The release holds `radar.bin` (the app, used for updates) and `radar-full.bin` (bootloader, partitions and app, to flash a new board with `esptool.py --chip esp32s3 write_flash 0x0 radar-full.bin`).
+
+Every screen running a release checks the latest one at boot (after 3 min) and every night at 4:00, and on demand from the settings screen. A newer version is downloaded into the other OTA slot, then the screen restarts on it. The new firmware is kept once it has been online for a minute; if it crashes before that, the bootloader goes back to the previous one. Local builds (version from `git describe`, not `vX.Y.Z`) never update themselves.
+
 ## Mac simulator
 
 ```sh

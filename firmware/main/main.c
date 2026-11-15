@@ -2,6 +2,7 @@
 #include "board.h"
 #include "esp_log.h"
 #include "nvs_flash.h"
+#include "ota.h"
 #include "lvgl_port.h"
 #include "plat_esp.h"
 #include "radar_app.h"
@@ -22,5 +23,6 @@ void app_main(void)
         lvgl_port_unlock();
     }
     board_backlight_on();
+    ota_start();                            /* nightly check of the GitHub releases */
     ESP_LOGI("radar", "started");
 }
