@@ -48,10 +48,10 @@ The mouse acts as a finger. In the simulator, any 8-character password "connects
 
 | Folder | Contents |
 |---|---|
-| `main/` | Startup, Waveshare board (RGB display, GT911 touch, CH422G), Wi-Fi, HTTPS, clock |
+| `main/` | Startup, Waveshare board (RGB display, GT911 touch, CH422G), Wi-Fi, HTTPS, clock, OTA updates (`ota.c`) |
 | `components/radar_app/` | LVGL UI, ADS-B and route data, base map, icons, fonts |
 | `sim/` | SDL2 simulator: Mac platform (pthreads, libcurl, fake Wi-Fi) |
-| `tools/` | `gen_assets.py` (map + icons), `gen_fonts.sh` (fonts with French accents) |
+| `tools/` | `gen_assets.py` (map + icons), `gen_fonts.sh` (fonts with French accents, clock digits), `gen_airports.py` (airport table) |
 
 ## Useful settings
 
@@ -64,4 +64,4 @@ The mouse acts as a finger. In the simulator, any 8-character password "connects
 - The CH422G pin EXIO5 selects USB (low) or CAN (high) on GPIO19/20: keep it low or the USB port disappears.
 - The factory demo leaves a Wi-Fi network ("WSCSBZY") in NVS; scans pause auto-reconnect so it does not block them.
 - Wi-Fi reception is weak with the module's PCB antenna: keep metal away from it in the enclosure.
-- Routes come from adsbdb by callsign and are often stale: a route is shown only if the aircraft lies on it and flies toward the destination. Routes of every aircraft in view are prefetched over kept-alive HTTPS connections.
+- Routes: adsbdb's are often stale, so hexdb.io comes first (adsbdb gives the airline name and is the fallback). ICAO codes are resolved with an embedded table of ~5000 airports. A route is shown only if the aircraft lies on it and flies toward the destination; EuroAirport departures and arrivals are read off the flight when the databases are wrong. Routes of every aircraft in view are prefetched over kept-alive HTTPS connections.
