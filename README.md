@@ -74,7 +74,7 @@ python3 radar.py             # then open http://127.0.0.1:8080
 
 ![Enclosure, front view](enclosure/front.png)
 
-Three parts that print without supports: the frame in orange, the shell and the stand in black. The screen screws in from the back into its 4 M3 inserts. Printing and assembly details are in [`enclosure/README.md`](enclosure/README.md).
+Three parts that print without supports: the frame in orange, the shell and the easel stand in black. Four M3 × 20 screws go through the stand and the shell into the screen's inserts and hold everything together. Printing and assembly details are in [`enclosure/README.md`](enclosure/README.md).
 
 | Exploded view | Side view |
 |---|---|

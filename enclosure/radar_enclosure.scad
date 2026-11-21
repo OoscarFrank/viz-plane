@@ -77,7 +77,7 @@ module shell() {
       cylinder(d = 3.4, h = 40);
       cylinder(d = 6.5, h = 1 + max(cb, 0));
     }
-    // shell -> stand screws: M3 x 12 button head ISO 7380 (1.65 mm head fits under the board)
+    // former shell -> stand screws (unused since the one-piece easel stand)
     for (s = STAND_SCREWS) translate([each P(s[0], s[1]), OUT_BACK - 1]) cylinder(d = 3.4, h = 10);
     // USB-C cable slot in the right side wall (open toward the front)
     translate([GW / 2 - 1, P(0, USB_Y[usb_port])[1], 0]) rotate([0, 90, 0]) hull() {
@@ -116,18 +116,66 @@ function W(p) = [p[0], p[1] * st - p[2] * ct, p[1] * ct + p[2] * st];
 LOW = min([for (q = [[-BOX_H / 2, OUT_BACK], [-BEZ_H / 2, WALL_TOP + plate], [-BEZ_H / 2, WALL_TOP - skirt]]) q[0] * ct + q[1] * st]);
 module to_world() { translate([0, 0, -LOW]) multmatrix([[1, 0, 0, 0], [0, st, -ct, 0], [0, ct, st, 0], [0, 0, 0, 1]]) children(); }
 
-// ---------- wedge stand (black), built directly on the table ----------
-A = W([0, -BOX_H / 2, OUT_BACK]) + [0, 0, -LOW];
-B = W([0, BOX_H / 2 - 6, OUT_BACK]) + [0, 0, -LOW];
-C = [0, B[1] + B[2] / tan(back_angle), 0];
+// ---------- easel stand (black): one piece, back plate + leg ----------
+// The plate covers the whole back of the shell. The 4 screen screws go through
+// stand + shell into the screen inserts and hold all three together (the shell's
+// STAND_SCREWS holes are unused). Prints in one piece without supports: shell-side
+// face on the bed, the leg rising at ~64 degrees.
+plate_t   = 5;     // back plate thickness
+plate_screw_len = 20;  // screen screws through stand + shell: M3 x 20 button head
+hinge_y   = 22;    // where the leg meets the plate (enclosure y)
+foot_y    = 110;   // where the leg meets the table (world y)
+leg_t     = 6;     // leg thickness
+leg_w     = [70, 116];  // leg width at the plate and on the table (screwdriver clears it)
+wedge_len = 12;    // wedge between plate and leg, down from the hinge
+ZP = OUT_BACK - plate_t;                 // outer face of the plate
+function TW(p) = W(p) + [0, 0, -LOW];    // enclosure -> world point
+function yz(p) = [p[1], p[2]];
+HW = yz(TW([0, hinge_y, ZP]));           // hinge, world (y, z)
+FW = [foot_y, 0];
+LU = (FW - HW) / norm(FW - HW);          // along the leg, toward the foot
+LN = [-LU[1], LU[0]];                    // leg normal, away from the plate
+PV = [st, ct];                           // up along the plate
+PN = [ct, -st];                          // plate normal, toward the back
+function cross2(a, b) = a[0] * b[1] - a[1] * b[0];
+QW = HW - wedge_len * PV;                // bottom of the wedge on the plate
+RW = QW + cross2(HW - QW, LU) / cross2(PN, LU) * PN;   // ... and on the leg
+LEG_LEN = norm(FW - HW);
+module from_world() multmatrix([[1, 0, 0, 0], [0, st, ct, 0], [0, -ct, st, 0], [0, 0, 0, 1]]) translate([0, 0, LOW]) children();
+module behind_plate() to_world() translate([-500, -500, ZP - 1000]) cube([1000, 1000, 1000]);
+module above_table() translate([-500, -500, 0]) cube([1000, 1000, 1000]);
+// leg frame: x, s along the leg, w away from the plate (origin at the hinge)
+module leg_frame() multmatrix([[1, 0, 0, 0], [0, LU[0], LN[0], HW[0]], [0, LU[1], LN[1], HW[1]], [0, 0, 0, 1]]) children();
+
 module stand() {
-  difference() {
-    rotate([90, 0, 90]) translate([0, 0, -BOX_W / 2]) linear_extrude(BOX_W)
-      offset(r = 1.5) offset(delta = -1.5) polygon([[A[1], A[2]], [B[1], B[2]], [C[1], C[2]]]);
-    // screwdriver access to the 4 screen screws
-    to_world() for (h = SCREEN_HOLES) translate([each P(h[0], h[1]), OUT_BACK + 0.5]) mirror([0, 0, 1]) cylinder(d = 9, h = 150);
-    // 2.6 mm pilot holes for the shell -> stand screws (M3 straight into the plastic)
-    to_world() for (s = STAND_SCREWS) translate([each P(s[0], s[1]), OUT_BACK + 0.5]) mirror([0, 0, 1]) cylinder(d = 2.6, h = 12.5);
+  cb = (back + (IN_BACK < BOSS_END ? BOSS_END - IN_BACK : 0)) + plate_t - (plate_screw_len - screw_engage);
+  intersection() {
+    difference() {
+      union() {
+        to_world() hull() {
+          slab(BOX_W, BOX_H, BOX_R, ZP + 1, OUT_BACK);
+          slab(BOX_W - 2, BOX_H - 2, BOX_R - 1, ZP, ZP + 1);
+        }
+        intersection() {
+          union() {
+            leg_frame() hull() {
+              translate([0, -10, 0]) linear_extrude(leg_t) rrect(leg_w[0], 4, 1.9);
+              translate([0, LEG_LEN + 15, 0]) linear_extrude(leg_t) rrect(leg_w[1], 4, 1.9);
+            }
+            rotate([90, 0, 90]) linear_extrude(leg_w[0] - 6, center = true) polygon([HW, QW, RW]);
+          }
+          behind_plate();
+        }
+      }
+      to_world() {
+        // screen screws, heads flush in the back face
+        for (h = SCREEN_HOLES) translate([each P(h[0], h[1]), ZP - 1]) {
+          cylinder(d = 3.4, h = plate_t + 2);
+          cylinder(d = 6.5, h = 1 + cb);
+        }
+      }
+    }
+    above_table();   // the bottom edge sits flat on the table
   }
 }
 
@@ -155,10 +203,11 @@ if (part == "assembly") {
 } else if (part == "w_shell") { to_world() shell();          // assembled pose, for the 3D viewer
 } else if (part == "w_frame") { to_world() frame();
 } else if (part == "w_screen") { to_world() screen();
+} else if (part == "w_stand") { stand();
 } else if (part == "frame") {
   translate([0, 0, WALL_TOP + plate]) mirror([0, 0, 1]) frame();   // front face on the bed
 } else if (part == "shell") {
   translate([0, 0, -OUT_BACK]) shell();                            // back on the bed
 } else if (part == "stand") {
-  stand();                                                         // base on the bed
+  translate([0, 0, OUT_BACK]) mirror([0, 0, 1]) from_world() stand();   // shell-side face on the bed
 }
