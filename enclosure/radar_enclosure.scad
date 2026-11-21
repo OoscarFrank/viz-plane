@@ -106,8 +106,7 @@ module frame() {
       }
     }
     slab(GW - 2 * lip, GH - 2 * lip, GR - lip, WALL_TOP - 1, WALL_TOP + plate + 1);
-    // skirt notch for the cable
-    translate([BOX_W / 2 - 1, P(0, USB_Y[usb_port])[1] - cable_w / 2, WALL_TOP - skirt - 1]) cube([skirt_t + skirt_gap + 3, cable_w, skirt + 1]);
+    // no cable notch: the cable leaves the shell behind the skirt (USB_Z > skirt)
   }
 }
 
