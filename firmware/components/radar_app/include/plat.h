@@ -20,6 +20,11 @@ bool plat_local_date(int *wday, int *mday, int *mon); /* wday 0 = Sunday, mon 0 
 void *plat_big_alloc(size_t n);                      /* large buffers (PSRAM on the ESP32) */
 void plat_big_free(void *p);
 void plat_thread(void (*fn)(void *), void *arg, const char *name, uint32_t stack_bytes);
+size_t plat_inflate(const void *src, size_t n, void *dst, size_t cap);   /* zlib stream; bytes written, 0 on error */
+
+/* Settings kept across restarts */
+int plat_setting_get(const char *key, int def);
+void plat_setting_set(const char *key, int value);
 
 /* LVGL lock (recursive): take it to touch the UI from another thread */
 bool plat_lock(int timeout_ms);

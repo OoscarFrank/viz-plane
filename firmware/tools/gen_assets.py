@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generates the base map (800x440, RGB565) and the aircraft icons for LVGL 8.
+"""Draws the Mulhouse-Basel base map (used by tools/gen_maps.py) and generates the aircraft icons for LVGL 8.
 
 Geographic data comes from ../radar.py (the GEO object of the simulator page).
 Map labels stay in French, like the rest of the on-screen text.
@@ -172,8 +172,7 @@ def icon(kind, outline, size=32):
 
 def main():
     OUT.mkdir(parents=True, exist_ok=True)
-    bg = basemap(); bg.save(ROOT / "map_bg_preview.png")
-    (OUT / "map_bg.c").write_text(c_array("img_map_bg", rgb565(bg), W, H, "LV_IMG_CF_TRUE_COLOR", "Mulhouse-Basel base map 800x440 RGB565"))
+    basemap().save(ROOT / "map_bg_preview.png")   # the map itself goes into assets/zones.c (tools/gen_maps.py)
     parts = []
     for kind in ("jet", "light", "heli"):
         for ol in (False, True):
@@ -183,7 +182,7 @@ def main():
             for a in icon(kind, ol).tobytes(): data += bytes((0xFF, 0xFF, a))
             parts.append(c_array(nm, bytes(data), 32, 32, "LV_IMG_CF_TRUE_COLOR_ALPHA", f"{kind} icon 32x32 RGB565+A8"))
     (OUT / "icons.c").write_text("\n".join(p if i == 0 else p.split("\n", 2)[2] for i, p in enumerate(parts)))
-    print("ok", (OUT / "map_bg.c").stat().st_size, (OUT / "icons.c").stat().st_size)
+    print("ok", (OUT / "icons.c").stat().st_size)
 
 
 if __name__ == "__main__":

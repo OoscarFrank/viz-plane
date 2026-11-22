@@ -1,6 +1,7 @@
 /* LVGL 8 radar UI: map, aircraft, flight card, list, Wi-Fi settings.
  * Same layout as the web simulator (radar.py), at 800x480. On-screen text stays in French. */
 #include <math.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -28,7 +29,7 @@
 #define TRAIL_N 24
 #define PROF_N 60
 #define KM_LAT 111.32f
-#define KM_LON 75.04f   /* 111.32 x cos(47.67°) */
+#define KM_LON (zone->km_lon)
 
 typedef struct {
     bool used;
@@ -37,6 +38,10 @@ typedef struct {
     float off_lat, off_lon;  /* offset to absorb for smooth motion */
     float rlat, rlon;        /* displayed position */
     bool visible;
+    lv_coord_t px, py;       /* where the icon is drawn */
+    lv_coord_t ldx, ldy;     /* label offset from the icon, chosen by layout() */
+    lv_color_t col;          /* colour applied to icon and trail (restyling redraws: only on change) */
+    bool col_set;
     int label_pos;
     lv_obj_t *ol, *ic, *lbl, *trail;
     lv_point_t tp[TRAIL_N + 1];
@@ -139,6 +144,23 @@ static lv_obj_t *label(lv_obj_t *parent, const lv_font_t *f, lv_color_t c, const
     return l;
 }
 
+/* Setting a label always redraws it: skip when the text is the same (most do not change each second) */
+static void label_set(lv_obj_t *l, const char *t)
+{
+    const char *old = lv_label_get_text(l);
+    if (!old || strcmp(old, t)) lv_label_set_text(l, t);
+}
+
+static void label_fmt(lv_obj_t *l, const char *fmt, ...)
+{
+    char b[256];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(b, sizeof b, fmt, ap);
+    va_end(ap);
+    label_set(l, b);
+}
+
 static lv_obj_t *button(lv_obj_t *parent, const char *txt, lv_coord_t w, lv_coord_t h, bool primary,
                         lv_event_cb_t cb, void *ud)
 {
@@ -164,7 +186,7 @@ static void toast_hide(lv_timer_t *t) { (void)t; lv_obj_add_flag(lv_obj_get_pare
 static void toast_ex(const char *txt, uint32_t ms, int slot, lv_color_t border)
 {
     lv_obj_t *tb = lv_obj_get_parent(toast_lbl);
-    lv_label_set_text(toast_lbl, txt);
+    label_set(toast_lbl, txt);
     lv_obj_set_style_border_color(tb, border, 0);
     lv_obj_set_style_border_width(tb, slot >= 0 ? 2 : 1, 0);
     lv_obj_clear_flag(tb, LV_OBJ_FLAG_HIDDEN);
@@ -224,8 +246,8 @@ static void style_label(slot_t *s, bool sel)
 {
     const char *tag;
     rare_t r = rare_of(&s->d, &tag);
-    if (r) lv_label_set_text_fmt(s->lbl, "%s · %s", s->d.call, tag);
-    else lv_label_set_text(s->lbl, s->d.call);
+    if (r) label_fmt(s->lbl, "%s · %s", s->d.call, tag);
+    else label_set(s->lbl, s->d.call);
     bool dimmed = selected >= 0 && !sel;
     lv_color_t bg = sel ? C_FG : r ? rare_color(r) : C_BG;
     if (dimmed && r) bg = lv_color_mix(bg, C_BG, LV_OPA_40);
@@ -253,7 +275,7 @@ static void mark_selection(void)
         sel_edge = lv_label_create(map_obj);
         lv_obj_set_style_text_font(sel_edge, &font_s20, 0);
         lv_obj_set_style_text_color(sel_edge, C_ACCENT, 0);
-        lv_label_set_text(sel_edge, LV_SYMBOL_RIGHT);
+        label_set(sel_edge, LV_SYMBOL_RIGHT);
     }
     for (int i = 0; i < MAX_AC; i++) {
         if (!S[i].used) continue;
@@ -288,42 +310,42 @@ static void update_panel(void)
     ac_t *a = &s->d;
     char b1[32], b2[48];
     thousands(b1, sizeof b1, (a->alt + 5) / 10 * 10);
-    lv_label_set_text_fmt(p_val[0], "%s ft", b1);
+    label_fmt(p_val[0], "%s ft", b1);
     thousands(b2, sizeof b2, (long)lroundf(a->alt * 0.3048f / 10) * 10);
-    if (a->alt >= 8000) lv_label_set_text_fmt(p_sub[0], "FL%03d · %s m", (a->alt + 50) / 100, b2);
-    else lv_label_set_text_fmt(p_sub[0], "%s m", b2);
-    lv_label_set_text_fmt(p_val[1], "%d kt", (int)lroundf(a->gs));
+    if (a->alt >= 8000) label_fmt(p_sub[0], "FL%03d · %s m", (a->alt + 50) / 100, b2);
+    else label_fmt(p_sub[0], "%s m", b2);
+    label_fmt(p_val[1], "%d kt", (int)lroundf(a->gs));
     thousands(b1, sizeof b1, lroundf(a->gs * 1.852f));
-    lv_label_set_text_fmt(p_sub[1], "%s km/h", b1);
+    label_fmt(p_sub[1], "%s km/h", b1);
     static const char *card[] = {"N", "NE", "E", "SE", "S", "SO", "O", "NO"};
-    lv_label_set_text_fmt(p_val[2], "%03d°", (int)lroundf(a->trk) % 360);
-    lv_label_set_text_fmt(p_sub[2], "vers %s", card[(int)lroundf(a->trk / 45.0f) % 8]);
+    label_fmt(p_val[2], "%03d°", (int)lroundf(a->trk) % 360);
+    label_fmt(p_sub[2], "vers %s", card[(int)lroundf(a->trk / 45.0f) % 8]);
     int vs = (a->vs >= 0 ? a->vs + 25 : a->vs - 25) / 50 * 50;
     thousands(b1, sizeof b1, vs);
-    lv_label_set_text_fmt(p_val[3], "%s%s ft/min", vs > 0 ? "+" : "", b1);
-    lv_label_set_text_fmt(p_sub[3], "%d km de Mulhouse", (int)lroundf(dist_km(s->rlat, s->rlon, MUL_LAT, MUL_LON)));
+    label_fmt(p_val[3], "%s%s ft/min", vs > 0 ? "+" : "", b1);
+    label_fmt(p_sub[3], "%d km de %s", (int)lroundf(dist_km(s->rlat, s->rlon, zone->ref_lat, zone->ref_lon)), zone->ref);
     const char *tag;
     rare_t rare = rare_of(a, &tag);
-    if (rare) lv_label_set_text_fmt(p_phase, "%s · %s", tag, phase(a));
-    else lv_label_set_text(p_phase, phase(a));
+    if (rare) label_fmt(p_phase, "%s · %s", tag, phase(a));
+    else label_set(p_phase, phase(a));
     lv_obj_set_style_text_color(p_phase, rare ? rare_color(rare) : alt_color(a->alt), 0);
 
     const route_t *r = adsb_route(a);
     if (r) {
-        lv_label_set_text(p_from, r->from);
-        lv_label_set_text(p_to, r->to);
-        lv_label_set_text(p_from_n, r->from_city);
-        lv_label_set_text(p_to_n, r->to_city);
+        label_set(p_from, r->from);
+        label_set(p_to, r->to);
+        label_set(p_from_n, r->from_city);
+        label_set(p_to_n, r->to_city);
         float da = gc_km(r->from_lat, r->from_lon, s->rlat, s->rlon), db = gc_km(s->rlat, s->rlon, r->to_lat, r->to_lon);
         bool half = r->from[0] == '?' || r->to[0] == '?';      /* one end unknown: no progress */
         lv_bar_set_value(p_bar, !half && da + db > 1 ? (int32_t)(da / (da + db) * 1000) : 0, LV_ANIM_OFF);
         if (r->flight[0] || r->airline[0])
-            lv_label_set_text_fmt(p_line, "%s%s%s", r->flight, r->flight[0] && r->airline[0] ? " · " : "", r->airline);
+            label_fmt(p_line, "%s%s%s", r->flight, r->flight[0] && r->airline[0] ? " · " : "", r->airline);
     } else {
-        lv_label_set_text(p_from, "—");
-        lv_label_set_text(p_to, "—");
-        lv_label_set_text(p_from_n, adsb_route_pending(a->call) && plat_ms() - s->route_asked < 15000 ? "Recherche de la route…" : "Route inconnue");
-        lv_label_set_text(p_to_n, "");
+        label_set(p_from, "—");
+        label_set(p_to, "—");
+        label_set(p_from_n, adsb_route_pending(a->call) && plat_ms() - s->route_asked < 15000 ? "Recherche de la route…" : "Route inconnue");
+        label_set(p_to_n, "");
         lv_bar_set_value(p_bar, 0, LV_ANIM_OFF);
     }
 
@@ -339,7 +361,7 @@ static void update_panel(void)
     lv_chart_refresh(p_chart);
     thousands(b1, sizeof b1, (mn + 50) / 100 * 100);
     thousands(b2, sizeof b2, (mx + 50) / 100 * 100);
-    lv_label_set_text_fmt(p_prof_lbl, "Profil d'altitude · %s à %s ft", b1, b2);
+    label_fmt(p_prof_lbl, "Profil d'altitude · %s à %s ft", b1, b2);
 }
 
 static void open_panel(int i)
@@ -350,12 +372,12 @@ static void open_panel(int i)
     lv_obj_add_flag(list_panel, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(hint, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(panel, LV_OBJ_FLAG_HIDDEN);
-    lv_label_set_text(p_call, s->d.call);
-    lv_label_set_text(p_line, s->d.desc[0] ? s->d.desc : s->d.type);
-    lv_label_set_text(p_val[4], s->d.reg[0] ? s->d.reg : "—");
-    lv_label_set_text(p_sub[4], s->d.type[0] ? s->d.type : "");
-    lv_label_set_text(p_val[5], s->d.squawk[0] ? s->d.squawk : "—");
-    lv_label_set_text(p_sub[5], s->d.hex);
+    label_set(p_call, s->d.call);
+    label_set(p_line, s->d.desc[0] ? s->d.desc : s->d.type);
+    label_set(p_val[4], s->d.reg[0] ? s->d.reg : "—");
+    label_set(p_sub[4], s->d.type[0] ? s->d.type : "");
+    label_set(p_val[5], s->d.squawk[0] ? s->d.squawk : "—");
+    label_set(p_sub[5], s->d.hex);
     lv_obj_set_style_line_width(s->trail, 3, 0);
     style_label(s, true);
     mark_selection();
@@ -454,10 +476,10 @@ static void render_list(void)
     lv_obj_clean(list_rows);
     int idx[MAX_AC], n = 0;
     for (int i = 0; i < MAX_AC; i++) if (S[i].used && S[i].visible) idx[n++] = i;
-    for (int a = 1; a < n; a++)        /* sort by distance to Mulhouse */
+    for (int a = 1; a < n; a++)        /* sort by distance to the reference city */
         for (int b = a; b > 0; b--) {
-            float d1 = dist_km(S[idx[b - 1]].rlat, S[idx[b - 1]].rlon, MUL_LAT, MUL_LON);
-            float d2 = dist_km(S[idx[b]].rlat, S[idx[b]].rlon, MUL_LAT, MUL_LON);
+            float d1 = dist_km(S[idx[b - 1]].rlat, S[idx[b - 1]].rlon, zone->ref_lat, zone->ref_lon);
+            float d2 = dist_km(S[idx[b]].rlat, S[idx[b]].rlon, zone->ref_lat, zone->ref_lon);
             if (d2 < d1) { int t = idx[b]; idx[b] = idx[b - 1]; idx[b - 1] = t; } else break;
         }
     for (int k = 0; k < n; k++) {
@@ -483,7 +505,7 @@ static void render_list(void)
         lv_obj_t *al = label(r, &font_s16, C_FG, alt);
         lv_obj_align(al, LV_ALIGN_TOP_RIGHT, -12, 7);
         const route_t *rt = adsb_route(&s->d);
-        int km = (int)lroundf(dist_km(s->rlat, s->rlon, MUL_LAT, MUL_LON));
+        int km = (int)lroundf(dist_km(s->rlat, s->rlon, zone->ref_lat, zone->ref_lon));
         char what[24];
         if (rt) snprintf(what, sizeof what, "%s → %s", rt->from, rt->to);
         else snprintf(what, sizeof what, "%s", s->d.type[0] ? s->d.type : "?");
@@ -529,6 +551,91 @@ static lv_obj_t *build_list(lv_obj_t *scr)
     lv_obj_set_size(list_rows, PANEL_W - 1, MAP_H - 45);
     lv_obj_set_flex_flow(list_rows, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_scroll_dir(list_rows, LV_DIR_VER);
+    lv_obj_add_flag(p, LV_OBJ_FLAG_HIDDEN);
+    return p;
+}
+
+/* ---------- place: list under the title, map loaded into PSRAM ---------- */
+const zone_t *zone = &zones[0];
+int zone_gen;
+static lv_obj_t *map_bg, *title_btn, *title_lbl, *zone_panel;
+static lv_img_dsc_t map_dsc = {
+    .header.cf = LV_IMG_CF_TRUE_COLOR, .header.w = SCR_W, .header.h = MAP_H, .data_size = SCR_W * MAP_H * 2,
+};
+static uint8_t *map_px;
+static void slot_free(int i, const char *why);
+
+static void zone_load(int i)
+{
+    if (i < 0 || i >= zones_n) i = 0;
+    zone = &zones[i];
+    if (!map_px) map_px = plat_big_alloc(map_dsc.data_size);
+    if (!map_px || plat_inflate(zone->map, zone->map_len, map_px, map_dsc.data_size) != map_dsc.data_size)
+        printf("[radar] map of %s: cannot inflate\n", zone->title);
+    map_dsc.data = map_px;
+    lv_img_cache_invalidate_src(&map_dsc);
+    lv_img_set_src(map_bg, &map_dsc);
+    lv_obj_invalidate(map_bg);
+    label_fmt(title_lbl, "%s  " LV_SYMBOL_DOWN, zone->title);
+    lv_obj_update_layout(title_btn);
+    lv_coord_t x = lv_obj_get_width(title_btn) + 4;
+    lv_obj_align(chip, LV_ALIGN_LEFT_MID, x, 0);
+    lv_obj_align(age_lbl, LV_ALIGN_LEFT_MID, x + 140, 0);
+}
+
+static lv_obj_t *build_zones(lv_obj_t *scr);
+
+static void zone_cb(lv_event_t *e)
+{
+    int i = (int)(intptr_t)lv_event_get_user_data(e);
+    lv_obj_add_flag(zone_panel, LV_OBJ_FLAG_HIDDEN);
+    if (&zones[i] == zone) return;
+    close_panel();
+    lv_obj_add_flag(list_panel, LV_OBJ_FLAG_HIDDEN);
+    for (int j = 0; j < MAX_AC; j++) if (S[j].used) slot_free(j, "");
+    zone_gen++;
+    zone_load(i);
+    plat_setting_set("zone", i);
+    adsb_zone_changed();
+    last_ok = 0;
+    printf("[radar] place: %s\n", zone->title);
+}
+
+static void title_cb(lv_event_t *e)
+{
+    (void)e;
+    if (!lv_obj_has_flag(zone_panel, LV_OBJ_FLAG_HIDDEN)) { lv_obj_add_flag(zone_panel, LV_OBJ_FLAG_HIDDEN); return; }
+    lv_obj_t *old = zone_panel;
+    zone_panel = build_zones(lv_obj_get_parent(old));   /* rebuilt: the tick follows the current place */
+    lv_obj_del(old);
+    lv_obj_clear_flag(zone_panel, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(hint, LV_OBJ_FLAG_HIDDEN);
+}
+
+static lv_obj_t *build_zones(lv_obj_t *scr)
+{
+    const int row_h = 36, w = 250;
+    lv_obj_t *p = box(scr, 0, TOP_H, w, row_h * zones_n + 8, C_PANEL);
+    lv_obj_set_style_border_side(p, LV_BORDER_SIDE_RIGHT | LV_BORDER_SIDE_BOTTOM, 0);
+    lv_obj_set_style_border_width(p, 1, 0);
+    lv_obj_set_style_border_color(p, C_LINE, 0);
+    lv_obj_set_style_radius(p, 0, 0);
+    for (int i = 0; i < zones_n; i++) {
+        lv_obj_t *r = lv_btn_create(p);
+        lv_obj_remove_style_all(r);
+        lv_obj_set_pos(r, 0, 4 + i * row_h);
+        lv_obj_set_size(r, w - 1, row_h);
+        lv_obj_set_style_bg_opa(r, LV_OPA_COVER, LV_STATE_PRESSED);
+        lv_obj_set_style_bg_color(r, C_RAISE, LV_STATE_PRESSED);
+        lv_obj_add_event_cb(r, zone_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+        bool cur = &zones[i] == zone;
+        lv_obj_t *l = label(r, &font_s16, cur ? C_ACCENT : C_FG, zones[i].title);
+        lv_obj_align(l, LV_ALIGN_LEFT_MID, 14, 0);
+        if (cur) {
+            lv_obj_t *ok = label(r, &font_s16, C_ACCENT, LV_SYMBOL_OK);
+            lv_obj_align(ok, LV_ALIGN_RIGHT_MID, -14, 0);
+        }
+    }
     lv_obj_add_flag(p, LV_OBJ_FLAG_HIDDEN);
     return p;
 }
@@ -594,6 +701,44 @@ static void slot_free(int i, const char *why)
 typedef struct { lv_coord_t x, y, w, h; } rect_t;
 static bool overlap(rect_t a, rect_t b) { return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h; }
 
+/* Dead reckoning from the last report, easing out the jump when a new one arrives */
+static void position(slot_t *s, uint32_t now, lv_coord_t *x, lv_coord_t *y)
+{
+    float dt = (now - s->t) / 1000.0f, fwd = dt + s->d.seen_pos < 20 ? dt : 0;
+    float km = s->d.gs * 0.514444f / 1000.0f * fwd, r = s->d.trk * 0.0174533f;
+    float fade = dt < 2 ? 1 - dt / 2 : 0;
+    s->rlat = s->d.lat + km * cosf(r) / KM_LAT + s->off_lat * fade;
+    s->rlon = s->d.lon + km * sinf(r) / KM_LON + s->off_lon * fade;
+    proj(s->rlat, s->rlon, x, y);
+}
+
+static void place_icon(int i, lv_coord_t x, lv_coord_t y)
+{
+    slot_t *s = &S[i];
+    s->px = x; s->py = y;
+    lv_obj_set_pos(s->ol, x - 16, y - 16);
+    lv_obj_set_pos(s->ic, x - 16, y - 16);
+    lv_obj_set_pos(s->lbl, x + s->ldx, y + s->ldy);
+    if (i == selected && sel_ring) {
+        lv_obj_set_pos(sel_ring, x - 19, y - 19);
+        if (!lv_obj_has_flag(sel_edge, LV_OBJ_FLAG_HIDDEN)) lv_obj_set_y(sel_edge, y - 12);
+    }
+}
+
+/* 10 times a second: only the aircraft whose pixel changed move (labels, colours, trails: layout) */
+static void motion(lv_timer_t *t)
+{
+    (void)t;
+    uint32_t now = plat_ms();
+    for (int i = 0; i < MAX_AC; i++) {
+        slot_t *s = &S[i];
+        if (!s->used || !s->visible) continue;
+        lv_coord_t x, y;
+        position(s, now, &x, &y);
+        if (x != s->px || y != s->py) place_icon(i, x, y);
+    }
+}
+
 static void layout(void)
 {
     static const int8_t LX[4] = {14, 14, -14, -14}, LY[4] = {-20, 4, -20, 4};
@@ -605,13 +750,8 @@ static void layout(void)
     for (int i = 0; i < MAX_AC; i++) if (S[i].used && i != selected) order[n++] = i;
     for (int k = 0; k < n; k++) {
         slot_t *s = &S[order[k]];
-        float dt = (now - s->t) / 1000.0f, fwd = dt + s->d.seen_pos < 20 ? dt : 0;
-        float km = s->d.gs * 0.514444f / 1000.0f * fwd, r = s->d.trk * 0.0174533f;
-        float fade = dt < 2 ? 1 - dt / 2 : 0;
-        s->rlat = s->d.lat + km * cosf(r) / KM_LAT + s->off_lat * fade;
-        s->rlon = s->d.lon + km * sinf(r) / KM_LON + s->off_lon * fade;
         lv_coord_t x, y;
-        proj(s->rlat, s->rlon, &x, &y);
+        position(s, now, &x, &y);
         bool vis = x > -20 && x < SCR_W + 20 && y > -20 && y < MAP_H + 20;
         if (s->visible && !vis && order[k] == selected) { close_panel(); }
         s->visible = vis;
@@ -624,13 +764,15 @@ static void layout(void)
         lv_color_t col = alt_color(s->d.alt);
         if (selected >= 0 && order[k] != selected) col = lv_color_mix(col, C_BG, LV_OPA_40);
         int16_t ang = (int16_t)lroundf(s->d.trk * 10) % 3600;
-        lv_obj_set_pos(s->ol, x - 16, y - 16);
-        lv_obj_set_pos(s->ic, x - 16, y - 16);
         lv_img_set_angle(s->ol, ang);
         lv_img_set_angle(s->ic, ang);
-        lv_obj_set_style_img_recolor(s->ic, col, 0);
+        if (!s->col_set || s->col.full != col.full) {
+            lv_obj_set_style_img_recolor(s->ic, col, 0);
+            lv_obj_set_style_line_color(s->trail, col, 0);
+            s->col = col;
+            s->col_set = true;
+        }
         if (order[k] == selected && sel_ring) {
-            lv_obj_set_pos(sel_ring, x - 19, y - 19);
             bool under = x > SCR_W - PANEL_W - 8;      /* hidden by the card: point at it from the edge */
             if (under) {
                 lv_obj_set_pos(sel_edge, SCR_W - PANEL_W - 22, y - 12);
@@ -639,14 +781,14 @@ static void layout(void)
                 lv_obj_add_flag(sel_edge, LV_OBJ_FLAG_HIDDEN);
             }
         }
-        /* trail: one point every 6 px, the last one follows the aircraft */
+        /* trail: one point every 6 px, the last one follows the aircraft (redrawn only when it moved) */
+        bool moved = s->ntp == 0 || s->tp[s->ntp].x != x || s->tp[s->ntp].y != y;
         if (s->ntp == 0 || abs(s->tp[s->ntp - 1].x - x) + abs(s->tp[s->ntp - 1].y - y) > 6) {
             if (s->ntp == TRAIL_N) { memmove(s->tp, s->tp + 1, sizeof(lv_point_t) * (TRAIL_N - 1)); s->ntp--; }
             s->tp[s->ntp].x = x; s->tp[s->ntp].y = y; s->ntp++;
         }
         s->tp[s->ntp].x = x; s->tp[s->ntp].y = y;
-        lv_line_set_points(s->trail, s->tp, s->ntp + 1);
-        lv_obj_set_style_line_color(s->trail, col, 0);
+        if (moved) lv_line_set_points(s->trail, s->tp, s->ntp + 1);
         lv_point_t sz;
         lv_txt_get_size(&sz, lv_label_get_text(s->lbl), &font_m12, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
         rect_t b = {0};
@@ -664,7 +806,8 @@ static void layout(void)
         b.x = LX[best] > 0 ? x + LX[best] : x + LX[best] - b.w;
         b.y = y + LY[best];
         placed[np++] = b;
-        lv_obj_set_pos(s->lbl, b.x, b.y);
+        s->ldx = b.x - x; s->ldy = b.y - y;
+        place_icon(order[k], x, y);
     }
 }
 
@@ -788,7 +931,7 @@ static void ap_cb(lv_event_t *e)
     if (aps[i].secure) open_pw(aps[i].ssid);
     else {
         snprintf(pw_ssid, sizeof pw_ssid, "%s", aps[i].ssid);
-        lv_label_set_text_fmt(busy_lbl, "Connexion à %s…", pw_ssid);
+        label_fmt(busy_lbl, "Connexion à %s…", pw_ssid);
         lv_obj_clear_flag(busy, LV_OBJ_FLAG_HIDDEN);
         plat_wifi_connect(pw_ssid, "");
     }
@@ -912,7 +1055,7 @@ static void render_wifi_side(void)
         lv_obj_remove_style_all(sp);
         lv_obj_set_flex_grow(sp, 1);
         lv_obj_t *v = label(wifi_side, &font_m12, C_DIM, "");
-        lv_label_set_text_fmt(v, "Version %s", plat_version());
+        label_fmt(v, "Version %s", plat_version());
         button(wifi_side, LV_SYMBOL_REFRESH "  Mise à jour", 226, 44, false, update_cb, NULL);
         button(wifi_side, "Oublier ce réseau", 226, 44, false, forget_cb, NULL);
         button(wifi_side, LV_SYMBOL_EYE_CLOSE "  Mettre en veille", 226, 44, true, sleep_cb, NULL);
@@ -995,11 +1138,11 @@ static void pw_changed(void)
     size_t n = strlen(lv_textarea_get_text(pw_ta));
     if (n >= 8) {
         lv_obj_clear_state(pw_go, LV_STATE_DISABLED);
-        lv_label_set_text_fmt(pw_msg, "%u caractères", (unsigned)n);
+        label_fmt(pw_msg, "%u caractères", (unsigned)n);
     } else {
         lv_obj_add_state(pw_go, LV_STATE_DISABLED);
-        if (n) lv_label_set_text_fmt(pw_msg, "Encore %u caractère%s (8 minimum)", (unsigned)(8 - n), 8 - n > 1 ? "s" : "");
-        else lv_label_set_text(pw_msg, "8 caractères minimum");
+        if (n) label_fmt(pw_msg, "Encore %u caractère%s (8 minimum)", (unsigned)(8 - n), 8 - n > 1 ? "s" : "");
+        else label_set(pw_msg, "8 caractères minimum");
     }
     lv_obj_set_style_text_color(pw_msg, C_DIM, 0);
 }
@@ -1012,13 +1155,13 @@ static void eye_cb(lv_event_t *e)
     lv_obj_t *l = lv_obj_get_child(lv_event_get_target(e), 0);
     bool hide = !lv_textarea_get_password_mode(pw_ta);
     lv_textarea_set_password_mode(pw_ta, hide);
-    lv_label_set_text(l, hide ? LV_SYMBOL_EYE_OPEN : LV_SYMBOL_EYE_CLOSE);
+    label_set(l, hide ? LV_SYMBOL_EYE_OPEN : LV_SYMBOL_EYE_CLOSE);
 }
 
 static void go_cb(lv_event_t *e)
 {
     (void)e;
-    lv_label_set_text_fmt(busy_lbl, "Connexion à %s…", pw_ssid);
+    label_fmt(busy_lbl, "Connexion à %s…", pw_ssid);
     lv_obj_clear_flag(busy, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(busy);
     plat_wifi_connect(pw_ssid, lv_textarea_get_text(pw_ta));
@@ -1027,7 +1170,7 @@ static void go_cb(lv_event_t *e)
 static void open_pw(const char *ssid)
 {
     snprintf(pw_ssid, sizeof pw_ssid, "%s", ssid);
-    lv_label_set_text(pw_title, ssid);
+    label_set(pw_title, ssid);
     lv_textarea_set_text(pw_ta, "");
     lv_textarea_set_password_mode(pw_ta, true);
     pw_changed();
@@ -1099,6 +1242,7 @@ static void map_click_cb(lv_event_t *e)
     (void)e;
     close_panel();
     lv_obj_add_flag(list_panel, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(zone_panel, LV_OBJ_FLAG_HIDDEN);
 }
 
 static void offline_btn_cb(lv_event_t *e) { (void)e; open_wifi(); }
@@ -1106,7 +1250,7 @@ static void hint_hide(lv_timer_t *t) { (void)t; lv_obj_add_flag(hint, LV_OBJ_FLA
 
 static void set_chip(const char *txt, lv_color_t bg)
 {
-    lv_label_set_text(chip, txt);
+    label_set(chip, txt);
     lv_obj_set_style_bg_color(chip, bg, 0);
 }
 
@@ -1167,7 +1311,7 @@ static void saver_update(void)
             if (i == 0 && one) { lv_obj_add_flag(sv_dig[0], LV_OBJ_FLAG_HIDDEN); continue; }
             lv_obj_clear_flag(sv_dig[i], LV_OBJ_FLAG_HIDDEN);
             char t[2] = {d[i], 0};
-            lv_label_set_text(sv_dig[i], t);
+            label_set(sv_dig[i], t);
             lv_obj_set_pos(sv_dig[i], x, Y);
             if (i == 1) {                             /* colon centred in the wider gap */
                 int cx = x + 185 + (GAP - 185) / 2;
@@ -1180,7 +1324,7 @@ static void saver_update(void)
     if (world_n > 0) {
         char w[16];
         thousands(w, sizeof w, world_n);
-        lv_label_set_text_fmt(sv_world, "%s avions dans le monde", w);
+        label_fmt(sv_world, "%s avions dans le monde", w);
         lv_obj_align(sv_world, LV_ALIGN_TOP_MID, 0, 372);
     }
 }
@@ -1213,29 +1357,29 @@ static void tick(lv_timer_t *t)
     plat_net_state_t st = plat_wifi_info(ssid, ip, &rssi);
     int vis = 0;
     for (int i = 0; i < MAX_AC; i++) vis += S[i].used && S[i].visible;
-    lv_label_set_text_fmt(count_lbl, LV_SYMBOL_LIST "  %d avion%s", vis, vis > 1 ? "s" : "");
+    label_fmt(count_lbl, LV_SYMBOL_LIST "  %d avion%s", vis, vis > 1 ? "s" : "");
     if (st != NET_UP) {
         set_chip("HORS LIGNE", C_ERR);
-        lv_label_set_text(age_lbl, "");
+        label_set(age_lbl, "");
         lv_obj_set_style_text_color(wifi_btn_lbl, C_ERR, 0);
         if (!plat_wifi_has_saved() || st == NET_FAILED) lv_obj_clear_flag(offline, LV_OBJ_FLAG_HIDDEN);
     } else {
         lv_obj_set_style_text_color(wifi_btn_lbl, C_FG, 0);
         lv_obj_add_flag(offline, LV_OBJ_FLAG_HIDDEN);
-        if (!last_ok) { set_chip("CHARGEMENT", C_ACCENT); lv_label_set_text(age_lbl, ""); }
+        if (!last_ok) { set_chip("CHARGEMENT", C_ACCENT); label_set(age_lbl, ""); }
         else {
             set_chip(api_down ? "API INJOIGNABLE" : "EN DIRECT", api_down ? C_ERR : C_OK);
             if (world_n > 0 && !api_down) {
                 char w[16];
                 thousands(w, sizeof w, world_n);
-                lv_label_set_text_fmt(age_lbl, "%s avions suivis dans le monde", w);
+                label_fmt(age_lbl, "%s avions suivis dans le monde", w);
             } else {
-                lv_label_set_text_fmt(age_lbl, "%s · il y a %u s", last_source, (unsigned)((plat_ms() - last_ok) / 1000));
+                label_fmt(age_lbl, "%s · il y a %u s", last_source, (unsigned)((plat_ms() - last_ok) / 1000));
             }
         }
     }
     int h, m;
-    if (plat_local_time(&h, &m)) lv_label_set_text_fmt(clock_lbl, "%02d:%02d", h, m);
+    if (plat_local_time(&h, &m)) label_fmt(clock_lbl, "%02d:%02d", h, m);
 }
 
 static void events(lv_timer_t *t)
@@ -1266,7 +1410,7 @@ static void events(lv_timer_t *t)
     } else if (ev == NET_FAILED && waiting) {
         lv_obj_add_flag(busy, LV_OBJ_FLAG_HIDDEN);
         if (!lv_obj_has_flag(pw_scr, LV_OBJ_FLAG_HIDDEN)) {
-            lv_label_set_text(pw_msg, "Connexion impossible : vérifiez le mot de passe.");
+            label_set(pw_msg, "Connexion impossible : vérifiez le mot de passe.");
             lv_obj_set_style_text_color(pw_msg, C_ERR, 0);
         } else toast("Connexion impossible");
         render_wifi_side();
@@ -1282,15 +1426,22 @@ void radar_app_start(void)
     map_obj = box(scr, 0, TOP_H, SCR_W, MAP_H, C_BG);
     lv_obj_add_flag(map_obj, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(map_obj, map_click_cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *bg = lv_img_create(map_obj);
-    lv_img_set_src(bg, &img_map_bg);
+    map_bg = lv_img_create(map_obj);
 
     lv_obj_t *bar = box(scr, 0, 0, SCR_W, TOP_H, C_PANEL);
     lv_obj_set_style_border_side(bar, LV_BORDER_SIDE_BOTTOM, 0);
     lv_obj_set_style_border_width(bar, 1, 0);
     lv_obj_set_style_border_color(bar, C_LINE, 0);
-    lv_obj_t *title = label(bar, &font_s16, C_FG, "Mulhouse – Bâle");
-    lv_obj_align(title, LV_ALIGN_LEFT_MID, 12, 0);
+    title_btn = lv_btn_create(bar);
+    lv_obj_remove_style_all(title_btn);
+    lv_obj_set_height(title_btn, TOP_H);
+    lv_obj_set_width(title_btn, LV_SIZE_CONTENT);
+    lv_obj_set_style_pad_hor(title_btn, 12, 0);
+    lv_obj_set_style_bg_opa(title_btn, LV_OPA_COVER, LV_STATE_PRESSED);
+    lv_obj_set_style_bg_color(title_btn, C_RAISE, LV_STATE_PRESSED);
+    lv_obj_add_event_cb(title_btn, title_cb, LV_EVENT_CLICKED, NULL);
+    title_lbl = label(title_btn, &font_s16, C_FG, "");
+    lv_obj_align(title_lbl, LV_ALIGN_LEFT_MID, 0, 0);
     chip = label(bar, &font_m12, C_INK, "");
     lv_obj_set_style_bg_opa(chip, LV_OPA_COVER, 0);
     lv_obj_set_style_pad_hor(chip, 5, 0);
@@ -1324,6 +1475,8 @@ void radar_app_start(void)
 
     panel = build_panel(scr);
     list_panel = build_list(scr);
+    zone_panel = build_zones(scr);
+    zone_load(plat_setting_get("zone", 0));
 
     offline = box(scr, 0, TOP_H, SCR_W, MAP_H, C_BG);
     lv_obj_set_style_bg_opa(offline, LV_OPA_70, 0);
@@ -1359,6 +1512,7 @@ void radar_app_start(void)
     pw_scr = build_pw(scr);
 
     lv_timer_create(tick, 1000, NULL);
+    lv_timer_create(motion, 100, NULL);
     lv_timer_create(events, 100, NULL);
     tick(NULL);
     adsb_start();

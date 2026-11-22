@@ -7,6 +7,7 @@
 #include <strings.h>
 #include <time.h>
 #include <unistd.h>
+#include <zlib.h>
 #include "plat.h"
 #include "sim_tick.h"
 
@@ -45,6 +46,44 @@ uint32_t plat_ms(void) { return sim_tick_ms(); }
 void plat_sleep_ms(uint32_t ms) { usleep(ms * 1000); }
 void *plat_big_alloc(size_t n) { return malloc(n); }
 void plat_big_free(void *p) { free(p); }
+
+size_t plat_inflate(const void *src, size_t n, void *dst, size_t cap)
+{
+    uLongf len = cap;
+    return uncompress(dst, &len, src, n) == Z_OK ? len : 0;
+}
+
+/* Settings: one "key value" line each in ~/.viz-plane-sim */
+static void settings_path(char *p, size_t cap) { snprintf(p, cap, "%s/.viz-plane-sim", getenv("HOME") ? getenv("HOME") : "."); }
+
+int plat_setting_get(const char *key, int def)
+{
+    char path[512], k[32];
+    int v;
+    settings_path(path, sizeof path);
+    FILE *f = fopen(path, "r");
+    if (!f) return def;
+    while (fscanf(f, "%31s %d", k, &v) == 2)
+        if (!strcmp(k, key)) { def = v; break; }
+    fclose(f);
+    return def;
+}
+
+void plat_setting_set(const char *key, int value)
+{
+    char path[512], k[32], lines[2048] = "";
+    int v;
+    settings_path(path, sizeof path);
+    FILE *f = fopen(path, "r");
+    if (f) {
+        while (fscanf(f, "%31s %d", k, &v) == 2)
+            if (strcmp(k, key)) snprintf(lines + strlen(lines), sizeof lines - strlen(lines), "%s %d\n", k, v);
+        fclose(f);
+    }
+    if (!(f = fopen(path, "w"))) return;
+    fprintf(f, "%s%s %d\n", lines, key, value);
+    fclose(f);
+}
 bool plat_lock(int timeout_ms) { (void)timeout_ms; return pthread_mutex_lock(&lock) == 0; }
 void plat_unlock(void) { pthread_mutex_unlock(&lock); }
 

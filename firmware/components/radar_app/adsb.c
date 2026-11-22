@@ -1,4 +1,4 @@
-/* Data thread: ADS-B aircraft (adsb.lol, adsb.fi, airplanes.live) and routes (adsbdb).
+/* Data thread: ADS-B aircraft (adsb.lol, adsb.fi, airplanes.live) around the selected place, and routes.
  * Same logic as radar.py: fall back between providers, back off after a 429. */
 #include <math.h>
 #include <stdio.h>
@@ -11,16 +11,17 @@
 
 #define POLL_MS 10000
 #define WORLD_MS 60000
-#define BUF_CAP (160 * 1024)
-#define ROUTE_CACHE 96       /* > MAX_AC: every aircraft in view keeps its route */
+#define BUF_CAP (512 * 1024)   /* busy places (London, New York) send 200+ aircraft */
+#define ROUTE_CACHE 128      /* > MAX_AC: every aircraft in view keeps its route */
 #define ROUTE_GAP_MS 250     /* spacing between adsbdb requests */
 
-typedef struct { const char *name; const char *url; uint32_t pause_until; int strikes; } provider_t;
+typedef struct { const char *name; const char *url_fmt; uint32_t pause_until; int strikes; } provider_t;
 
+/* url_fmt takes the centre of the map (lat, lon) and the radius in NM */
 static provider_t providers[] = {
-    {"adsb.lol", "https://api.adsb.lol/v2/point/47.67/7.47/30", 0, 0},
-    {"adsb.fi", "https://opendata.adsb.fi/api/v2/lat/47.67/lon/7.47/dist/30", 0, 0},
-    {"airplanes.live", "https://api.airplanes.live/v2/point/47.67/7.47/30", 0, 0},
+    {"adsb.lol", "https://api.adsb.lol/v2/point/%.3f/%.3f/%d", 0, 0},
+    {"adsb.fi", "https://opendata.adsb.fi/api/v2/lat/%.3f/lon/%.3f/dist/%d", 0, 0},
+    {"airplanes.live", "https://api.airplanes.live/v2/point/%.3f/%.3f/%d", 0, 0},
 };
 #define NPROV (int)(sizeof providers / sizeof providers[0])
 
@@ -47,8 +48,9 @@ static double num(const cJSON *o, const char *k, double def)
     return cJSON_IsNumber(it) ? it->valuedouble : def;
 }
 
-static int parse_aircraft(const char *json)
+static int parse_aircraft(const char *json, const zone_t *z)
 {
+    const float mlat = (z->lat1 - z->lat0) * 0.08f, mlon = (z->lon1 - z->lon0) * 0.08f;
     cJSON *root = cJSON_Parse(json);
     if (!root) return -1;
     const cJSON *arr = cJSON_GetObjectItemCaseSensitive(root, "ac");
@@ -62,6 +64,8 @@ static int parse_aircraft(const char *json)
         if (cJSON_IsString(alt)) continue;                          /* "ground" */
         double lat = num(a, "lat", 999), lon = num(a, "lon", 999);
         if (lat > 90 || num(a, "seen_pos", 0) > 30) continue;
+        /* only what the map can show (plus a margin to slide in): the query is a circle around it */
+        if (lat < z->lat0 - mlat || lat > z->lat1 + mlat || lon < z->lon0 - mlon || lon > z->lon1 + mlon) continue;
         ac_t *p = &parsed[n];
         memset(p, 0, sizeof *p);
         copy_str(p->hex, sizeof p->hex, cJSON_GetObjectItemCaseSensitive(a, "hex"));
@@ -90,8 +94,8 @@ static int parse_aircraft(const char *json)
     return n;
 }
 
-/* One attempt across the available providers. Returns the number of aircraft, or -1. */
-static int fetch_once(const char **source)
+/* One attempt across the available providers for the place z. Returns the number of aircraft, or -1. */
+static int fetch_once(const zone_t *z, const char **source)
 {
     uint32_t now = plat_ms();
     for (int i = 0; i < NPROV; i++) {
@@ -99,10 +103,12 @@ static int fetch_once(const char **source)
         if ((int32_t)(pv->pause_until - now) > 0) continue;
         size_t len = 0;
         int retry = 0;
-        int st = plat_http_get(pv->url, buf, BUF_CAP - 1, &len, &retry);
+        char url[96];
+        snprintf(url, sizeof url, pv->url_fmt, (z->lat0 + z->lat1) / 2, (z->lon0 + z->lon1) / 2, RADIUS_NM);
+        int st = plat_http_get(url, buf, BUF_CAP - 1, &len, &retry);
         if (st == 200) {
             buf[len] = 0;
-            int n = parse_aircraft(buf);
+            int n = parse_aircraft(buf, z);
             if (n >= 0) { pv->strikes = 0; *source = pv->name; return n; }
             printf("[radar] %s: unreadable response (%u bytes)\n", pv->name, (unsigned)len);
             pv->pause_until = now + 30000;
@@ -270,21 +276,29 @@ bool adsb_route_pending(const char *callsign)
     return callsign[0] != 0;
 }
 
-#define BSL_LAT 47.5896f
-#define BSL_LON 7.5299f
-
-/* Departures from / arrivals to EuroAirport, read off the flight itself:
- * low, close, climbing away from the airport or descending toward it. */
-static int bsl_movement(const ac_t *a)       /* +1 departure, -1 arrival, 0 neither */
+/* Departures from / arrivals to an airport of the place, read off the flight itself:
+ * low, close, climbing away from the airport or descending toward it. With several
+ * airports (Paris, New York...), the nearest one that fits wins. */
+static int movement(const ac_t *a, const zone_airport_t **apt)   /* +1 departure, -1 arrival, 0 neither */
 {
-    float d = gc_km(BSL_LAT, BSL_LON, a->lat, a->lon);
-    if (a->alt <= 0 || a->alt > 15000 || d > 60) return 0;
-    if (d < 3) return a->vs > 300 ? 1 : a->vs < -300 ? -1 : 0;
-    float away = bearing(BSL_LAT, BSL_LON, a->lat, a->lon);
-    float dh = fabsf(fmodf(away - a->trk + 540.0f, 360.0f) - 180.0f);
-    if (a->vs > 500 && dh < 70) return 1;
-    if (a->vs < -500 && dh > 110) return -1;
-    return 0;
+    int best = 0;
+    float best_d = 1e9f;
+    if (a->alt <= 0 || a->alt > 15000) return 0;
+    for (int i = 0; i < zone->n_apt; i++) {
+        const zone_airport_t *p = &zone->apt[i];
+        float d = gc_km(p->lat, p->lon, a->lat, a->lon);
+        if (d > 60 || d >= best_d) continue;
+        int mv = 0;
+        if (d < 3) {
+            mv = a->vs > 300 ? 1 : a->vs < -300 ? -1 : 0;
+        } else {
+            float away = bearing(p->lat, p->lon, a->lat, a->lon);
+            float dh = fabsf(fmodf(away - a->trk + 540.0f, 360.0f) - 180.0f);
+            mv = a->vs > 500 && dh < 70 ? 1 : a->vs < -500 && dh > 110 ? -1 : 0;
+        }
+        if (mv) { best = mv; best_d = d; *apt = p; }
+    }
+    return best;
 }
 
 const route_t *adsb_route(const ac_t *a)
@@ -292,17 +306,18 @@ const route_t *adsb_route(const ac_t *a)
     const route_t *db = NULL;
     for (int i = 0; i < ROUTE_CACHE; i++)
         if (routes[i].done && routes[i].found && !strcmp(routes[i].call, a->call)) { db = &routes[i].r; break; }
-    int mv = bsl_movement(a);
-    if (db && route_plausible(db, a) && (mv == 0 || !strcmp(mv > 0 ? db->from : db->to, "BSL"))) return db;
+    const zone_airport_t *apt = NULL;
+    int mv = movement(a, &apt);
+    if (db && route_plausible(db, a) && (mv == 0 || !strcmp(mv > 0 ? db->from : db->to, apt->iata))) return db;
     if (mv == 0) return NULL;
     /* the database is wrong or silent: keep the airport we are sure of, the other end is unknown */
     static route_t r;
     memset(&r, 0, sizeof r);
     if (db) { memcpy(r.airline, db->airline, sizeof r.airline); memcpy(r.flight, db->flight, sizeof r.flight); }
-    snprintf(mv > 0 ? r.from : r.to, 5, "BSL");
-    snprintf(mv > 0 ? r.from_city : r.to_city, 24, "Bâle-Mulhouse");
+    snprintf(mv > 0 ? r.from : r.to, 5, "%s", apt->iata);
+    snprintf(mv > 0 ? r.from_city : r.to_city, 24, "%s", apt->city);
     snprintf(mv > 0 ? r.to : r.from, 5, "?");
-    if (mv > 0) { r.from_lat = BSL_LAT; r.from_lon = BSL_LON; } else { r.to_lat = BSL_LAT; r.to_lon = BSL_LON; }
+    if (mv > 0) { r.from_lat = apt->lat; r.from_lon = apt->lon; } else { r.to_lat = apt->lat; r.to_lon = apt->lon; }
     return &r;
 }
 
@@ -322,6 +337,10 @@ static void fetch_world(void)
     plat_unlock();
 }
 
+static volatile bool poll_now;
+
+void adsb_zone_changed(void) { poll_now = true; }
+
 static void task(void *arg)
 {
     (void)arg;
@@ -330,11 +349,18 @@ static void task(void *arg)
         char ssid[33], ip[16];
         int rssi;
         if (plat_wifi_info(ssid, ip, &rssi) != NET_UP) { plat_sleep_ms(500); continue; }
-        if ((int32_t)(plat_ms() - next) >= 0) {
-            const char *src = NULL;
-            int n = fetch_once(&src);
+        if (poll_now || (int32_t)(plat_ms() - next) >= 0) {
+            poll_now = false;
             plat_lock(-1);
-            if (n >= 0) {
+            const zone_t *z = zone;
+            int gen = zone_gen;
+            plat_unlock();
+            const char *src = NULL;
+            int n = fetch_once(z, &src);
+            plat_lock(-1);
+            if (gen != zone_gen) {
+                /* the place changed during the request: these aircraft belong to the old one */
+            } else if (n >= 0) {
                 ui_apply_aircraft(parsed, n, src);
                 for (int i = 0; i < n; i++) adsb_request_route(parsed[i].call, false);   /* prefetch */
             } else {

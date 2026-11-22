@@ -51,7 +51,7 @@ The mouse acts as a finger. In the simulator, any 8-character password "connects
 | `main/` | Startup, Waveshare board (RGB display, GT911 touch, CH422G), Wi-Fi, HTTPS, clock, OTA updates (`ota.c`) |
 | `components/radar_app/` | LVGL UI, ADS-B and route data, base map, icons, fonts |
 | `sim/` | SDL2 simulator: Mac platform (pthreads, libcurl, fake Wi-Fi) |
-| `tools/` | `gen_assets.py` (map + icons), `gen_fonts.sh` (fonts with French accents, clock digits), `gen_airports.py` (airport table) |
+| `tools/` | `gen_maps.py` (the places and their maps, from OpenStreetMap and Natural Earth), `gen_assets.py` (Mulhouse–Basel map, icons), `gen_fonts.sh` (fonts with French accents, clock digits), `gen_airports.py` (airport table) |
 
 ## Useful settings
 

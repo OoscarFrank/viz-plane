@@ -1,18 +1,19 @@
 # viz-plane
 
-A 7″ touchscreen that sits on a desk, powered by a single USB-C cable, showing the aircraft flying over Mulhouse and Basel in real time.
+A 7″ touchscreen that sits on a desk, powered by a single USB-C cable, showing the aircraft flying over Mulhouse and Basel (or ten other places around the world) in real time.
 
 ![Map with live aircraft](docs/screenshots/map.png)
 
-- **Map**: the Mulhouse–Basel area (borders, Rhine, motorways, towns, EuroAirport), with aircraft rotated to their heading and coloured by altitude. The top bar shows how many aircraft are tracked worldwide.
+- **Map**: the Mulhouse–Basel area (borders, Rhine, motorways, towns, EuroAirport), with aircraft rotated to their heading and coloured by altitude, moving smoothly between reports. The top bar shows how many aircraft are tracked worldwide.
+- **Places**: tap the title to switch to Paris, New York, Tel Aviv, Dubai, London, Geneva, Zurich, Amsterdam, Nice or Hong Kong. Each place has its own map (coastline, motorways, rivers, runways, towns) and the choice is kept across restarts.
 - **Flight card**: tap an aircraft to see its route, altitude, ground speed, heading, vertical rate, registration and altitude profile. The selected aircraft gets a ring on the map, the others are dimmed.
-- **Routes**: from hexdb.io, checked against the aircraft's position and heading; departures from and arrivals to EuroAirport are read off the flight itself.
+- **Routes**: from hexdb.io, checked against the aircraft's position and heading; departures from and arrivals to the airports of the place are read off the flight itself.
 - **Rare aircraft**: emergencies (7700, 7600, 7500), military aircraft and giants (A380, 747, An-124, Beluga…) get a coloured tag, and a banner when they enter the area.
-- **List**: every aircraft in the area, sorted by distance to Mulhouse.
+- **List**: every aircraft in the area, sorted by distance to the main city.
 - **Settings**: pick a Wi-Fi network and type the password on an on-screen AZERTY keyboard; check for updates; sleep mode.
 - **Sleep mode**: a big clock on black with the worldwide aircraft count; a tap goes back to the map.
 - **Over-the-air updates**: each version tag is built by GitHub Actions and published as a release; screens install it on their own at night.
-- **Enclosure**: 3D printed wedge tilted 18°, orange frame and black base.
+- **Enclosure**: 3D printed, tilted 18° on an easel stand, coloured frame and black back.
 
 The on-screen interface is in French.
 
@@ -82,7 +83,7 @@ Three parts that print without supports: the frame in orange, the shell and the 
 
 ## Data
 
-ADS-B positions come from the free community networks [adsb.lol](https://adsb.lol), [adsb.fi](https://adsb.fi) and [airplanes.live](https://airplanes.live), falling back from one to the next and backing off automatically when rate limited. Routes are looked up by callsign through [hexdb.io](https://hexdb.io), with [adsbdb](https://www.adsbdb.com) for airline names and as a fallback; the worldwide count comes from the [adsb.fi](https://adsb.fi) stats. Map data: Natural Earth, france-geojson, swiss-maps (FSO/swisstopo), deutschlandGeoJSON.
+ADS-B positions come from the free community networks [adsb.lol](https://adsb.lol), [adsb.fi](https://adsb.fi) and [airplanes.live](https://airplanes.live), falling back from one to the next and backing off automatically when rate limited. Routes are looked up by callsign through [hexdb.io](https://hexdb.io), with [adsbdb](https://www.adsbdb.com) for airline names and as a fallback; the worldwide count comes from the [adsb.fi](https://adsb.fi) stats. Map data: Natural Earth, france-geojson, swiss-maps (FSO/swisstopo), deutschlandGeoJSON, and © OpenStreetMap contributors (ODbL) for the maps of the other places.
 
 ## Third-party licences
 

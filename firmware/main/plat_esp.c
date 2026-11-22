@@ -16,6 +16,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "lvgl_port.h"
+#include "miniz.h"
+#include "nvs.h"
 #include "plat.h"
 #include "plat_esp.h"
 
@@ -31,6 +33,39 @@ uint32_t plat_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
 void plat_sleep_ms(uint32_t ms) { vTaskDelay(pdMS_TO_TICKS(ms)); }
 void *plat_big_alloc(size_t n) { return heap_caps_malloc(n, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT); }
 void plat_big_free(void *p) { heap_caps_free(p); }
+
+size_t plat_inflate(const void *src, size_t n, void *dst, size_t cap)
+{
+    /* the decompressor state is ~11 KB: on the heap, not on the caller's stack */
+    tinfl_decompressor *d = malloc(sizeof *d);
+    if (!d) return 0;
+    tinfl_init(d);
+    size_t in = n, out = cap;
+    tinfl_status st = tinfl_decompress(d, src, &in, dst, dst, &out,
+                                       TINFL_FLAG_PARSE_ZLIB_HEADER | TINFL_FLAG_USING_NON_WRAPPING_OUTPUT_BUF);
+    free(d);
+    return st == TINFL_STATUS_DONE ? out : 0;
+}
+
+int plat_setting_get(const char *key, int def)
+{
+    nvs_handle_t h;
+    int32_t v = def;
+    if (nvs_open("radar", NVS_READONLY, &h) == ESP_OK) {
+        if (nvs_get_i32(h, key, &v) != ESP_OK) v = def;
+        nvs_close(h);
+    }
+    return v;
+}
+
+void plat_setting_set(const char *key, int value)
+{
+    nvs_handle_t h;
+    if (nvs_open("radar", NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_set_i32(h, key, value);
+    nvs_commit(h);
+    nvs_close(h);
+}
 bool plat_lock(int timeout_ms) { return lvgl_port_lock(timeout_ms); }
 void plat_unlock(void) { lvgl_port_unlock(); }
 

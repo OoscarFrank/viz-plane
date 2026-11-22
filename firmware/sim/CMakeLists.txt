@@ -10,6 +10,7 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(SDL2 REQUIRED sdl2)
 find_package(CURL REQUIRED)
 find_package(Threads REQUIRED)
+find_package(ZLIB REQUIRED)
 
 set(APP ${CMAKE_CURRENT_LIST_DIR}/../components/radar_app)
 set(LVGL ${CMAKE_CURRENT_LIST_DIR}/../components/lvgl__lvgl)
@@ -22,8 +23,8 @@ target_compile_definitions(lvgl PUBLIC LV_CONF_INCLUDE_SIMPLE)
 target_compile_options(lvgl PRIVATE -w)
 
 add_executable(radar_sim main_sim.c plat_sim.c cjson/cJSON.c
-  ${APP}/ui.c ${APP}/adsb.c ${APP}/assets/map_bg.c ${APP}/assets/icons.c ${APP}/assets/airports.c ${FONTS})
+  ${APP}/ui.c ${APP}/adsb.c ${APP}/assets/zones.c ${APP}/assets/icons.c ${APP}/assets/airports.c ${FONTS})
 target_include_directories(radar_sim PRIVATE ${APP} ${APP}/include cjson ${SDL2_INCLUDE_DIRS})
 target_link_directories(radar_sim PRIVATE ${SDL2_LIBRARY_DIRS})
-target_link_libraries(radar_sim PRIVATE lvgl ${SDL2_LIBRARIES} CURL::libcurl Threads::Threads m)
+target_link_libraries(radar_sim PRIVATE lvgl ${SDL2_LIBRARIES} CURL::libcurl ZLIB::ZLIB Threads::Threads m)
 target_compile_options(radar_sim PRIVATE -Wall -Wextra -Wno-unused-parameter)

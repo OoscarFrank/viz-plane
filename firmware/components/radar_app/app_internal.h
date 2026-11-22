@@ -3,21 +3,21 @@
 #include <stdint.h>
 #include "lvgl.h"
 
-#define MAX_AC 64
+#define MAX_AC 96
 
-/* Map extent: same as the web simulator and tools/gen_assets.py */
-#define LON0 6.93f
-#define LON1 8.01f
-#define LAT0 47.47f
-#define LAT1 47.87f
+#include "assets/zones.h"
+
+/* The place on screen (assets/zones.c), changed from the place list */
+extern const zone_t *zone;
+extern int zone_gen;                /* bumped on every change: data fetched before is dropped */
+#define LON0 (zone->lon0)
+#define LON1 (zone->lon1)
+#define LAT0 (zone->lat0)
+#define LAT1 (zone->lat1)
 #define SCR_W 800
 #define TOP_H 40
 #define MAP_H 440
-#define CENTER_LAT 47.67
-#define CENTER_LON 7.47
-#define RADIUS_NM 30
-#define MUL_LAT 47.7508f
-#define MUL_LON 7.3359f
+#define RADIUS_NM 25                /* covers the 81 x 45 km map */
 
 typedef enum { KIND_JET, KIND_LIGHT, KIND_HELI } ac_kind_t;
 
@@ -45,6 +45,7 @@ typedef struct {
 
 /* adsb.c */
 void adsb_start(void);
+void adsb_zone_changed(void);                            /* poll the new place now; LVGL lock held */
 void adsb_request_route(const char *callsign, bool urgent);  /* LVGL lock held */
 bool adsb_route_pending(const char *callsign);           /* lookup not answered yet; LVGL lock held */
 const route_t *adsb_route(const ac_t *a);                /* NULL if unknown or implausible; LVGL lock held */
@@ -62,7 +63,6 @@ LV_FONT_DECLARE(font_s16);
 LV_FONT_DECLARE(font_s20);
 LV_FONT_DECLARE(font_b24);
 LV_FONT_DECLARE(font_clock);
-LV_IMG_DECLARE(img_map_bg);
 LV_IMG_DECLARE(img_jet);
 LV_IMG_DECLARE(img_jet_ol);
 LV_IMG_DECLARE(img_light);
