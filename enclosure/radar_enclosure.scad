@@ -41,6 +41,7 @@ skirt_gap = 0.15;
 screw_len = 16;    // screen screws: M3 x 16 button head ISO 7380
 screw_engage = 2.0;// thread engaged in the screen insert
 cable_w   = 5.6;   // cable slot width
+plate_t   = 5;     // stand: thickness of the plate covering the back
 $fn = 64;
 
 // ---------- derived ----------
@@ -113,7 +114,10 @@ module frame() {
 // ---------- enclosure -> world (horizontal table) ----------
 st = sin(tilt); ct = cos(tilt);
 function W(p) = [p[0], p[1] * st - p[2] * ct, p[1] * ct + p[2] * st];
-LOW = min([for (q = [[-BOX_H / 2, OUT_BACK], [-BEZ_H / 2, WALL_TOP + plate], [-BEZ_H / 2, WALL_TOP - skirt]]) q[0] * ct + q[1] * st]);
+// lowest point on the table: the bottom edge of the stand's plate (its 1 mm chamfer), so that
+// the plate keeps the full outline of the shell instead of being cut by the table
+LOW = min([for (q = [[-BOX_H / 2, OUT_BACK], [-BEZ_H / 2, WALL_TOP + plate], [-BEZ_H / 2, WALL_TOP - skirt],
+                     [-BOX_H / 2, OUT_BACK - plate_t + 1], [-BOX_H / 2 + 1, OUT_BACK - plate_t]]) q[0] * ct + q[1] * st]);
 module to_world() { translate([0, 0, -LOW]) multmatrix([[1, 0, 0, 0], [0, st, -ct, 0], [0, ct, st, 0], [0, 0, 0, 1]]) children(); }
 
 // ---------- easel stand (black): one piece, back plate + leg ----------
@@ -121,7 +125,6 @@ module to_world() { translate([0, 0, -LOW]) multmatrix([[1, 0, 0, 0], [0, st, -c
 // stand + shell into the screen inserts and hold all three together (the shell's
 // STAND_SCREWS holes are unused). Prints in one piece without supports: shell-side
 // face on the bed, the leg rising at ~64 degrees.
-plate_t   = 5;     // back plate thickness
 plate_screw_len = 20;  // screen screws through stand + shell: M3 x 20 button head
 hinge_y   = 22;    // where the leg meets the plate (enclosure y)
 foot_y    = 110;   // where the leg meets the table (world y)
@@ -175,7 +178,7 @@ module stand() {
         }
       }
     }
-    above_table();   // the bottom edge sits flat on the table
+    above_table();
   }
 }
 
